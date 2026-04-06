@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+edge_log_*.csv
+.env
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+data/
