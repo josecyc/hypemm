@@ -35,7 +35,16 @@ The insight: correlated crypto perps on Hyperliquid temporarily diverge from the
 3. Compute the z-score: `(current_ratio - mean) / std_dev`
 4. **Entry**: If z > +2.0, short the ratio (short A, long B). If z < -2.0, long the ratio.
 5. **Correlation gate**: Only enter if 7-day rolling Pearson correlation of hourly returns > 0.7
-6. **Exit**: When |z| < 0.5 (mean reversion), |z| > 4.0 (stop loss), or 48h held (time stop)
+6. **Exit** (whichever comes first):
+   - **Mean reversion**: z crosses back past ±0.5 toward zero. For a long ratio (entered at z < -2.0), exit when z >= -0.5. For a short ratio (entered at z > +2.0), exit when z <= +0.5. Note: the exit threshold is directional — a long ratio at z = -0.55 has NOT exited yet, it needs to reach -0.5 or higher.
+   - **Stop loss**: |z| > 4.0 (divergence accelerating, cut losses)
+   - **Time stop**: 48 hours held without exit signal
+
+### 2.2 Evaluation cadence
+
+All entry/exit decisions are made **once per hour**, at the top of each UTC hour. This matches the backtest, which uses hourly candle closes. Between hours, the dashboard updates z-scores every 60 seconds for visibility, but no trades are placed until the next hourly evaluation.
+
+**Implication**: If z briefly crosses the exit threshold intra-hour but reverts by the time the hourly eval fires, the exit is missed. This is a known tradeoff — the backtest was calibrated on hourly data, so running at a different frequency would be a different (untested) strategy.
 
 ### 2.2 Pairs traded
 
