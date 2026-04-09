@@ -44,7 +44,11 @@ The insight: correlated crypto perps on Hyperliquid temporarily diverge from the
 
 All entry/exit decisions are made **once per hour**, at the top of each UTC hour. This matches the backtest, which uses hourly candle closes. Between hours, the dashboard updates z-scores every 60 seconds for visibility, but no trades are placed until the next hourly evaluation.
 
-**Implication**: If z briefly crosses the exit threshold intra-hour but reverts by the time the hourly eval fires, the exit is missed. This is a known tradeoff — the backtest was calibrated on hourly data, so running at a different frequency would be a different (untested) strategy.
+**Implication**: If z briefly crosses the exit threshold intra-hour but reverts by the time the hourly eval fires, the exit is missed. This is a known limitation, not a feature.
+
+**Why we don't check exits more frequently**: The backtest used hourly candle closes. All P&L expectations, win rates, Sharpe ratios, and drawdown numbers are calibrated to this timescale. Checking exits every minute would be a different strategy with unknown performance characteristics — it could be better (faster exits, less slippage on reversions) or worse (more whipsaw exits on noise). We don't have minute-level historical data going back months to test this.
+
+**Future improvement**: Backtest with minute-level exit checks on hourly entries. If the results are equal or better, switch. This requires sourcing minute candle data (the HL API only returns hourly candles for extended history).
 
 ### 2.2 Pairs traded
 
