@@ -22,6 +22,7 @@ packages = ["src/hypemm"]
 
 [tool.black]
 line-length = 99
+target-version = ["py313"]
 
 [tool.ruff]
 line-length = 99

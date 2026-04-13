@@ -60,9 +60,7 @@ def load_trades(path: Path) -> list[CompletedTrade]:
         reader = csv.DictReader(f)
         for row in reader:
             dir_str = row["direction"]
-            direction = (
-                Direction.LONG_RATIO if dir_str == "long_ratio" else Direction.SHORT_RATIO
-            )
+            direction = Direction.LONG_RATIO if dir_str == "long_ratio" else Direction.SHORT_RATIO
             trades.append(
                 CompletedTrade(
                     pair_label=row["pair_label"],
@@ -175,9 +173,7 @@ def _signal_status(
     return "no_signal"
 
 
-def _pos_str(pos: object) -> str:
+def _pos_str(pos: OpenPosition | None) -> str:
     if pos is None:
         return ""
-    if isinstance(pos, OpenPosition):
-        return pos.direction_str
-    return ""
+    return pos.direction_str

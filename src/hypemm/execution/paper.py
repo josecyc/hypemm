@@ -25,11 +25,11 @@ class PaperExecutionAdapter:
         notional_per_leg: float,
     ) -> tuple[float, float]:
         """Fetch current mid prices as paper fill prices."""
-        price_a = self._fetch_mid(pair.coin_a)
-        price_b = self._fetch_mid(pair.coin_b)
+        price_a = self.fetch_mid(pair.coin_a)
+        price_b = self.fetch_mid(pair.coin_b)
         return price_a, price_b
 
-    def _fetch_mid(self, coin: str) -> float:
+    def fetch_mid(self, coin: str) -> float:
         """Fetch the current mid price for a coin."""
         try:
             r = self.client.post(self.rest_url, json={"type": "l2Book", "coin": coin})

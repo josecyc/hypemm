@@ -34,8 +34,8 @@ def test_pair_config_frozen() -> None:
 
 
 def test_direction_values() -> None:
-    assert Direction.LONG_RATIO == 1
-    assert Direction.SHORT_RATIO == -1
+    assert Direction.LONG_RATIO.value == 1
+    assert Direction.SHORT_RATIO.value == -1
 
 
 def test_signal_creation() -> None:

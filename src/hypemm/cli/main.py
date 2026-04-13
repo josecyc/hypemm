@@ -158,7 +158,7 @@ def cmd_paper(args: argparse.Namespace) -> None:
     buffer = HourlyPriceBuffer(config.all_coins)
     seed_price_buffer(buffer, config, infra)
 
-    last_signal_hour = -1
+    last_epoch_hour = -1
     logging.info("Starting paper trade monitor (Ctrl+C to stop)")
 
     try:
@@ -168,9 +168,9 @@ def cmd_paper(args: argparse.Namespace) -> None:
                 prices: dict[str, float] = {}
                 for coin in config.all_coins:
                     try:
-                        prices[coin] = adapter._fetch_mid(coin)
+                        prices[coin] = adapter.fetch_mid(coin)
                     except Exception:
-                        pass
+                        logging.warning("Failed to fetch price for %s", coin)
                     time.sleep(0.3)
 
                 now_ms = int(time.time() * 1000)
@@ -189,9 +189,8 @@ def cmd_paper(args: argparse.Namespace) -> None:
                         signals[pair.label] = sig
 
                 # Process hourly
-                current_hour = datetime.now(timezone.utc).hour
-                if current_hour != last_signal_hour:
-                    last_signal_hour = current_hour
+                if epoch_hour != last_epoch_hour:
+                    last_epoch_hour = epoch_hour
                     orders = engine.process_bar(signals, now_ms)
                     for order in orders:
                         if isinstance(order, EntryOrder):

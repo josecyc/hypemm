@@ -78,12 +78,10 @@ class TestExitLogic:
         pair = PairConfig("LINK", "SOL")
         engine = StrategyEngine(_config_with_pair(pair))
 
-        # Enter long ratio
         entry_sig = _make_signal(pair, z=-2.5, corr=0.9, price_a=15.0, price_b=150.0)
         orders = engine.process_bar({pair.label: entry_sig}, timestamp_ms=1000)
         engine.confirm_entry(orders[0], 15.0, 150.0, 1000)  # type: ignore[arg-type]
 
-        # Z reverts to -0.3 -> should exit
         exit_sig = _make_signal(pair, z=-0.3, corr=0.9, price_a=16.0, price_b=149.0)
         orders = engine.process_bar({pair.label: exit_sig}, timestamp_ms=2000)
         assert len(orders) == 1
@@ -126,16 +124,13 @@ class TestExitLogic:
         To test stop loss in isolation, use a tight exit_z.
         """
         pair = PairConfig("LINK", "SOL")
-        # exit_z=-5 (effectively disabled), stop_loss_z=4.0
         config = StrategyConfig(pairs=(pair,), exit_z=-5.0, stop_loss_z=4.0)
         engine = StrategyEngine(config)
 
-        # Enter long ratio at z=-2.5
         entry_sig = _make_signal(pair, z=-2.5, corr=0.9)
         orders = engine.process_bar({pair.label: entry_sig}, timestamp_ms=1000)
         engine.confirm_entry(orders[0], 15.0, 150.0, 1000)  # type: ignore[arg-type]
 
-        # For LONG_RATIO, stop loss is z > stop_loss_z (4.0)
         stop_sig = _make_signal(pair, z=4.5)
         orders = engine.process_bar({pair.label: stop_sig}, timestamp_ms=2000)
         assert len(orders) == 1
@@ -151,7 +146,6 @@ class TestExitLogic:
         orders = engine.process_bar({pair.label: entry_sig}, timestamp_ms=1000)
         engine.confirm_entry(orders[0], 15.0, 150.0, 1000)  # type: ignore[arg-type]
 
-        # Simulate 3 hours passing with no exit signal
         for i in range(3):
             hold_sig = _make_signal(pair, z=-1.5)
             orders = engine.process_bar({pair.label: hold_sig}, timestamp_ms=2000 + i * 3600_000)
@@ -168,7 +162,6 @@ class TestCooldown:
         config = StrategyConfig(pairs=(pair,), cooldown_hours=2)
         engine = StrategyEngine(config)
 
-        # Enter and exit
         entry_sig = _make_signal(pair, z=-2.5, corr=0.9)
         orders = engine.process_bar({pair.label: entry_sig}, timestamp_ms=1000)
         engine.confirm_entry(orders[0], 15.0, 150.0, 1000)  # type: ignore[arg-type]
@@ -177,16 +170,13 @@ class TestCooldown:
         orders = engine.process_bar({pair.label: exit_sig}, timestamp_ms=2000)
         engine.confirm_exit(orders[0], 16.0, 149.0, 2000)  # type: ignore[arg-type]
 
-        # Try to re-enter immediately - should be blocked by cooldown
         re_entry_sig = _make_signal(pair, z=-2.5, corr=0.9)
         orders = engine.process_bar({pair.label: re_entry_sig}, timestamp_ms=3000)
         assert len(orders) == 0
 
-        # Second hour of cooldown
         orders = engine.process_bar({pair.label: re_entry_sig}, timestamp_ms=4000)
         assert len(orders) == 0
 
-        # Cooldown expired
         orders = engine.process_bar({pair.label: re_entry_sig}, timestamp_ms=5000)
         assert len(orders) == 1
 
@@ -228,15 +218,12 @@ class TestStatePersistence:
         pair = PairConfig("LINK", "SOL")
         engine = StrategyEngine(_config_with_pair(pair))
 
-        # Enter a position
         entry_sig = _make_signal(pair, z=-2.5, corr=0.85)
         orders = engine.process_bar({pair.label: entry_sig}, timestamp_ms=1000)
         engine.confirm_entry(orders[0], 15.0, 150.0, 1000)  # type: ignore[arg-type]
 
-        # Save state
         state = engine.get_state()
 
-        # Load into new engine
         engine2 = StrategyEngine(_config_with_pair(pair))
         engine2.load_state(state)
 

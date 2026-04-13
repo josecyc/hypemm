@@ -29,16 +29,13 @@ def test_save_and_load_round_trip(tmp_path: Path) -> None:
     config = StrategyConfig(pairs=(pair,))
     engine = StrategyEngine(config)
 
-    # Enter a position
     sig = _make_signal(pair, z=-2.5)
     orders = engine.process_bar({pair.label: sig}, timestamp_ms=1000)
     engine.confirm_entry(orders[0], 15.0, 150.0, 1000)  # type: ignore[arg-type]
 
-    # Save
     state_path = tmp_path / "state.json"
     save_state(engine, state_path, start_time="2026-04-01T00:00:00")
 
-    # Load into new engine
     engine2 = StrategyEngine(config)
     start_time = load_state(engine2, state_path)
 

@@ -161,11 +161,11 @@ def _format_corr(corr: float | None, threshold: float) -> str:
 
 
 def _format_position(
-    pos: object,
+    pos: OpenPosition | None,
     sig: Signal | None,
     config: StrategyConfig,
 ) -> tuple[str, str, str]:
-    if not isinstance(pos, OpenPosition):
+    if pos is None:
         return ("[dim]---[/dim]", "[dim]---[/dim]", "[dim]---[/dim]")
 
     if pos.direction == Direction.LONG_RATIO:
@@ -187,7 +187,7 @@ def _format_position(
 def _format_signal(
     z: float | None,
     corr: float | None,
-    pos: object,
+    pos: OpenPosition | None,
     cooldown: int,
     config: StrategyConfig,
 ) -> str:
