@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from hypemm.math.pnl import compute_leg_pnl, compute_trade_pnl, compute_unrealized_pnl
+from hypemm.math import compute_leg_pnl, compute_unrealized_pnl
 from hypemm.models import Direction, OpenPosition, PairConfig
 
 
@@ -81,37 +81,6 @@ class TestComputeLegPnl:
         )
         assert long_a == pytest.approx(-short_a)
         assert long_b == pytest.approx(-short_b)
-
-
-class TestComputeTradePnl:
-    def test_includes_cost(self) -> None:
-        """Net P&L should deduct round-trip costs."""
-        pnl_a, pnl_b, gross, net = compute_trade_pnl(
-            Direction.LONG_RATIO,
-            notional=50_000,
-            cost_per_side_bps=2.0,
-            entry_price_a=100.0,
-            entry_price_b=200.0,
-            exit_price_a=110.0,
-            exit_price_b=190.0,
-        )
-        expected_cost = 50_000 * 2 * 2.0 / 10_000 * 2  # $40
-        assert gross == pytest.approx(pnl_a + pnl_b)
-        assert net == pytest.approx(gross - expected_cost)
-
-    def test_cost_calculation(self) -> None:
-        """Verify the round-trip cost formula: notional * 2 * bps/10000 * 2."""
-        _, _, _, net = compute_trade_pnl(
-            Direction.LONG_RATIO,
-            notional=50_000,
-            cost_per_side_bps=2.0,
-            entry_price_a=100.0,
-            entry_price_b=200.0,
-            exit_price_a=100.0,
-            exit_price_b=200.0,
-        )
-        # Zero gross, minus $40 cost
-        assert net == pytest.approx(-40.0)
 
 
 class TestComputeUnrealizedPnl:

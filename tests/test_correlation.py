@@ -5,7 +5,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from hypemm.math.correlation import compute_correlation_single, rolling_correlation
+from hypemm.math import compute_correlation_single, rolling_correlation
 
 
 class TestRollingCorrelation:

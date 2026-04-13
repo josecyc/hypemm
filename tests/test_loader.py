@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from hypemm.data.loader import load_candles
+from hypemm.data import load_candles
 
 
 def _write_csv(path: Path, coin: str, rows: list[tuple[int, float]]) -> None:

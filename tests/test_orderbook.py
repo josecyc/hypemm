@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from hypemm.analysis.orderbook import analyze_book, fill_rating
+from hypemm.validate import analyze_book, fill_rating
 
 
 class TestAnalyzeBook:

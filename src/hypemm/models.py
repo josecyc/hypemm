@@ -137,3 +137,32 @@ class StateCorruptionError(HypeMMError):
 
 class ConfigurationError(HypeMMError):
     """Invalid configuration."""
+
+
+# -- Result types --
+
+
+@dataclass(frozen=True)
+class BacktestResult:
+    """Summary of a backtest run."""
+
+    trades: list[CompletedTrade]
+    total_net: float
+    win_rate: float
+    sharpe: float
+    max_drawdown: float
+    monthly: list[dict[str, object]]
+
+
+@dataclass(frozen=True)
+class SweepRow:
+    """One row of a parameter sweep result."""
+
+    lookback: int
+    entry_z: float
+    trades: int
+    win_rate: float
+    net: float
+    daily: float
+    max_dd: float
+    sharpe: float

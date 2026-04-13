@@ -2,27 +2,18 @@
 
 from __future__ import annotations
 
+import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from hypemm.models import PairConfig
-
-DEFAULT_PAIRS: tuple[PairConfig, ...] = (
-    PairConfig("LINK", "SOL"),
-    PairConfig("DOGE", "AVAX"),
-    PairConfig("SOL", "AVAX"),
-    PairConfig("BTC", "SOL"),
-)
-
-
-def _default_pairs() -> tuple[PairConfig, ...]:
-    return DEFAULT_PAIRS
 
 
 @dataclass(frozen=True)
 class StrategyConfig:
     """All tunable strategy parameters. Immutable so parameter sweeps create new instances."""
 
+    pairs: tuple[PairConfig, ...]
     lookback_hours: int = 48
     entry_z: float = 2.0
     exit_z: float = 0.5
@@ -33,7 +24,6 @@ class StrategyConfig:
     cooldown_hours: int = 2
     corr_window_hours: int = 168
     corr_threshold: float = 0.7
-    pairs: tuple[PairConfig, ...] = field(default_factory=_default_pairs)
 
     @property
     def round_trip_cost(self) -> float:
@@ -76,23 +66,62 @@ class InfraConfig:
         return self.data_dir / "orderbook_snapshots"
 
 
-# -- Gate thresholds for the analysis pipeline --
+@dataclass(frozen=True)
+class GateConfig:
+    """Thresholds for the validation gates."""
 
-GATE1_MIN_PROFITABLE_MONTHS = 4
-GATE1_MIN_PROFITABLE_PARAMS = 7
-GATE1_MIN_SHARPE = 1.0
-GATE1_MAX_MONTH_DD = 15_000
+    min_sharpe: float = 1.0
+    min_high_corr_pct: float = 65
+    max_breakdown_hours: int = 336
+    min_easy_pairs: int = 3
+    depth_bps_levels: tuple[int, ...] = (2, 5, 10, 25, 50)
+    ob_snapshot_interval_sec: int = 300
+    ob_collection_duration_sec: int = 7200
 
-GATE2_MIN_HIGH_CORR_PCT = 65
-GATE2_MIN_HIGH_CORR_WR = 75
-GATE2_MAX_BREAKDOWN_HOURS = 336
 
-GATE3_MIN_EASY_PAIRS = 3
-GATE3_MIN_DEPTH_10BPS = 25_000
+@dataclass(frozen=True)
+class SweepConfig:
+    """Parameter sweep grid definition."""
 
-SWEEP_LOOKBACKS = [24, 48, 72]
-SWEEP_ENTRY_Z = [1.5, 2.0, 2.5]
+    lookbacks: tuple[int, ...] = (24, 48, 72)
+    entry_zs: tuple[float, ...] = (1.5, 2.0, 2.5)
 
-DEPTH_BPS_LEVELS = [2, 5, 10, 25, 50]
-OB_SNAPSHOT_INTERVAL_SEC = 300
-OB_COLLECTION_DURATION_SEC = 7200
+
+@dataclass(frozen=True)
+class AppConfig:
+    """Top-level application config loaded from TOML."""
+
+    strategy: StrategyConfig
+    infra: InfraConfig
+    gates: GateConfig
+    sweep: SweepConfig
+
+
+def load_config(path: Path) -> AppConfig:
+    """Load application config from a TOML file."""
+    with open(path, "rb") as f:
+        raw = tomllib.load(f)
+
+    strategy_raw = dict(raw.get("strategy", {}))
+    pairs_raw = strategy_raw.pop("pairs", [])
+    pairs = tuple(PairConfig(p["coin_a"], p["coin_b"]) for p in pairs_raw)
+    strategy = StrategyConfig(pairs=pairs, **strategy_raw)
+
+    infra_raw = dict(raw.get("infra", {}))
+    if "data_dir" in infra_raw:
+        infra_raw["data_dir"] = Path(infra_raw["data_dir"])
+    infra = InfraConfig(**infra_raw)
+
+    gates_raw = dict(raw.get("gates", {}))
+    if "depth_bps_levels" in gates_raw:
+        gates_raw["depth_bps_levels"] = tuple(gates_raw["depth_bps_levels"])
+    gates = GateConfig(**gates_raw)
+
+    sweep_raw = dict(raw.get("sweep", {}))
+    if "lookbacks" in sweep_raw:
+        sweep_raw["lookbacks"] = tuple(sweep_raw["lookbacks"])
+    if "entry_zs" in sweep_raw:
+        sweep_raw["entry_zs"] = tuple(sweep_raw["entry_zs"])
+    sweep = SweepConfig(**sweep_raw)
+
+    return AppConfig(strategy=strategy, infra=infra, gates=gates, sweep=sweep)

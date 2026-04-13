@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 from hypemm.config import StrategyConfig
+from hypemm.engine import StrategyEngine
 from hypemm.models import Direction, EntryOrder, ExitOrder, ExitReason, PairConfig, Signal
-from hypemm.strategy.engine import StrategyEngine
 
 
 def _make_signal(
@@ -117,12 +117,7 @@ class TestExitLogic:
         assert len(orders) == 0
 
     def test_stop_loss_with_wide_exit(self) -> None:
-        """Stop loss triggers when exit_z is tight enough that mean_revert doesn't catch it.
-
-        With default params, mean_revert (z >= -exit_z or z <= exit_z)
-        always fires before stop loss because |stop_loss_z| > |exit_z|.
-        To test stop loss in isolation, use a tight exit_z.
-        """
+        """Stop loss triggers when exit_z is tight enough that mean_revert doesn't catch it."""
         pair = PairConfig("LINK", "SOL")
         config = StrategyConfig(pairs=(pair,), exit_z=-5.0, stop_loss_z=4.0)
         engine = StrategyEngine(config)

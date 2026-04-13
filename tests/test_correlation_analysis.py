@@ -5,7 +5,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from hypemm.analysis.correlation import (
+from hypemm.validate import (
     compute_returns,
     correlation_regimes,
     find_breakdowns,

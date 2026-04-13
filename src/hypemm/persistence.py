@@ -1,19 +1,74 @@
-"""CSV logging for completed trades and hourly snapshots."""
+"""Engine state persistence and CSV trade logging."""
 
 from __future__ import annotations
 
 import csv
+import json
 import logging
 from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
 
 from hypemm.config import StrategyConfig
-from hypemm.math.pnl import compute_unrealized_pnl
-from hypemm.models import CompletedTrade, Direction, ExitReason, OpenPosition, Signal
-from hypemm.strategy.engine import StrategyEngine
+from hypemm.engine import StrategyEngine
+from hypemm.math import compute_unrealized_pnl
+from hypemm.models import (
+    CompletedTrade,
+    Direction,
+    ExitReason,
+    OpenPosition,
+    Signal,
+    StateCorruptionError,
+)
 
 logger = logging.getLogger(__name__)
+
+
+# -- Engine state --
+
+
+def save_state(engine: StrategyEngine, path: Path, start_time: str = "") -> None:
+    """Persist engine state to a JSON file."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    state = {
+        "saved_at": datetime.now(timezone.utc).isoformat(),
+        "start_time": start_time,
+        "engine": engine.get_state(),
+    }
+    with open(path, "w") as f:
+        json.dump(state, f, indent=2)
+    logger.info("State saved to %s", path)
+
+
+def load_state(engine: StrategyEngine, path: Path) -> str:
+    """Restore engine state from a JSON file.
+
+    Returns the start_time string from the saved state.
+    Raises StateCorruptionError if the file is corrupt.
+    """
+    if not path.exists():
+        raise FileNotFoundError(f"State file not found: {path}")
+
+    try:
+        with open(path) as f:
+            data = json.load(f)
+    except json.JSONDecodeError as e:
+        raise StateCorruptionError(f"Corrupt state file: {e}")
+
+    engine_state = data.get("engine")
+    if not isinstance(engine_state, dict):
+        raise StateCorruptionError("Missing 'engine' key in state file")
+
+    engine.load_state(engine_state)
+    start_time = str(data.get("start_time", ""))
+
+    n_pos = sum(1 for p in engine.positions.values() if p is not None)
+    logger.info("State restored: %d open positions", n_pos)
+    return start_time
+
+
+# -- Trade logging --
+
 
 TRADE_FIELDS = [
     "pair_label",
@@ -43,6 +98,7 @@ def log_trade(trade: CompletedTrade, path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     exists = path.exists()
     d = asdict(trade)
+    d["direction"] = trade.direction.label
     with open(path, "a", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=TRADE_FIELDS)
         if not exists:
@@ -85,6 +141,9 @@ def load_trades(path: Path) -> list[CompletedTrade]:
                 )
             )
     return trades
+
+
+# -- Hourly snapshots --
 
 
 SNAPSHOT_FIELDS = [

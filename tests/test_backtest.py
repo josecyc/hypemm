@@ -5,7 +5,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from hypemm.analysis.backtest import run_backtest
+from hypemm.backtest import run_backtest
 from hypemm.config import StrategyConfig
 from hypemm.models import PairConfig
 

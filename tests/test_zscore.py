@@ -5,7 +5,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from hypemm.math.zscore import compute_log_ratios, compute_z_score_single, compute_z_scores
+from hypemm.math import compute_log_ratios, compute_z_score_single, compute_z_scores
 
 
 class TestComputeLogRatios:

@@ -8,7 +8,7 @@ The caller executes orders and confirms fills back to the engine.
 from __future__ import annotations
 
 from hypemm.config import StrategyConfig
-from hypemm.math.pnl import compute_leg_pnl
+from hypemm.math import compute_leg_pnl
 from hypemm.models import (
     CompletedTrade,
     Direction,
@@ -63,7 +63,7 @@ class StrategyEngine:
 
         return orders
 
-    def _check_entry(self, pair: "PairConfig", signal: Signal) -> EntryOrder | None:
+    def _check_entry(self, pair: PairConfig, signal: Signal) -> EntryOrder | None:
         """Check if we should enter a position."""
         label = pair.label
 
@@ -85,7 +85,7 @@ class StrategyEngine:
 
     def _check_exit(
         self,
-        pair: "PairConfig",
+        pair: PairConfig,
         pos: OpenPosition,
         signal: Signal,
     ) -> ExitOrder | None:
@@ -113,7 +113,9 @@ class StrategyEngine:
         timestamp_ms: int,
     ) -> OpenPosition:
         """Confirm an entry fill. Registers the position internally."""
-        corr = order.signal.correlation if order.signal.correlation is not None else 0.0
+        if order.signal.correlation is None:
+            raise ValueError("Entry confirmed with None correlation — should have been blocked")
+        corr = order.signal.correlation
         pos = OpenPosition(
             pair=order.pair,
             direction=order.direction,

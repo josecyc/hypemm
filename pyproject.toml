@@ -11,7 +11,7 @@ dependencies = [
 ]
 
 [project.scripts]
-hypemm = "hypemm.cli.main:main"
+hypemm = "hypemm.cli:main"
 
 [build-system]
 requires = ["hatchling"]

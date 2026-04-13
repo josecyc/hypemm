@@ -5,8 +5,7 @@ from __future__ import annotations
 import numpy as np
 
 from hypemm.config import StrategyConfig
-from hypemm.math.correlation import compute_correlation_single
-from hypemm.math.zscore import compute_log_ratios, compute_z_score_single
+from hypemm.math import compute_correlation_single, compute_log_ratios, compute_z_score_single
 from hypemm.models import PairConfig, Signal
 
 

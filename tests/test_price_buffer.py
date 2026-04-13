@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from hypemm.data.price_buffer import HourlyPriceBuffer
+from hypemm.price_buffer import HourlyPriceBuffer
 
 
 class TestHourlyPriceBuffer:

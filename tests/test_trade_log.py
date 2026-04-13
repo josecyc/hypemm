@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from hypemm.models import CompletedTrade, Direction, ExitReason
-from hypemm.persistence.trade_log import load_trades, log_trade
+from hypemm.persistence import load_trades, log_trade
 
 
 def _make_trade(pair_label: str = "LINK/SOL", net_pnl: float = 500.0) -> CompletedTrade:
@@ -41,6 +41,7 @@ def test_log_and_load_round_trip(tmp_path: Path) -> None:
     assert loaded[0].pair_label == "LINK/SOL"
     assert loaded[0].net_pnl == 500.0
     assert loaded[0].exit_reason == ExitReason.MEAN_REVERT
+    assert loaded[0].direction == Direction.LONG_RATIO
 
 
 def test_append_multiple_trades(tmp_path: Path) -> None:

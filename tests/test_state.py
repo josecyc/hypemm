@@ -7,9 +7,9 @@ from pathlib import Path
 import pytest
 
 from hypemm.config import StrategyConfig
+from hypemm.engine import StrategyEngine
 from hypemm.models import Direction, PairConfig, Signal, StateCorruptionError
-from hypemm.persistence.state import load_state, save_state
-from hypemm.strategy.engine import StrategyEngine
+from hypemm.persistence import load_state, save_state
 
 
 def _make_signal(pair: PairConfig, z: float, corr: float = 0.9) -> Signal:
@@ -47,14 +47,16 @@ def test_save_and_load_round_trip(tmp_path: Path) -> None:
 
 
 def test_load_missing_file_raises(tmp_path: Path) -> None:
-    config = StrategyConfig()
+    pair = PairConfig("LINK", "SOL")
+    config = StrategyConfig(pairs=(pair,))
     engine = StrategyEngine(config)
     with pytest.raises(FileNotFoundError):
         load_state(engine, tmp_path / "nonexistent.json")
 
 
 def test_load_corrupt_file_raises(tmp_path: Path) -> None:
-    config = StrategyConfig()
+    pair = PairConfig("LINK", "SOL")
+    config = StrategyConfig(pairs=(pair,))
     engine = StrategyEngine(config)
     path = tmp_path / "bad.json"
     path.write_text("not json{{{")

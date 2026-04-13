@@ -5,8 +5,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from hypemm.analysis.synthesize import load_json, run_synthesis
-from hypemm.config import StrategyConfig
+from hypemm.validate import load_json, run_synthesis
 
 
 def _write_json(path: Path, data: dict[str, object]) -> None:
@@ -42,19 +41,19 @@ class TestRunSynthesis:
 
     def test_all_pass_returns_go(self, tmp_path: Path) -> None:
         reports = self._setup_reports(tmp_path)
-        assert run_synthesis(reports, StrategyConfig()) == "GO"
+        assert run_synthesis(reports) == "GO"
 
     def test_two_fail_returns_no_go(self, tmp_path: Path) -> None:
         reports = self._setup_reports(tmp_path, bt="FAIL", corr="FAIL")
-        assert run_synthesis(reports, StrategyConfig()) == "NO-GO"
+        assert run_synthesis(reports) == "NO-GO"
 
     def test_one_fail_returns_conditional(self, tmp_path: Path) -> None:
         reports = self._setup_reports(tmp_path, ob="FAIL")
-        assert run_synthesis(reports, StrategyConfig()) == "CONDITIONAL"
+        assert run_synthesis(reports) == "CONDITIONAL"
 
     def test_missing_files_returns_incomplete(self, tmp_path: Path) -> None:
-        assert run_synthesis(tmp_path, StrategyConfig()) == "INCOMPLETE"
+        assert run_synthesis(tmp_path) == "INCOMPLETE"
 
     def test_partial_missing_returns_incomplete(self, tmp_path: Path) -> None:
         _write_json(tmp_path / "backtest_summary.json", {"verdict": "PASS"})
-        assert run_synthesis(tmp_path, StrategyConfig()) == "INCOMPLETE"
+        assert run_synthesis(tmp_path) == "INCOMPLETE"

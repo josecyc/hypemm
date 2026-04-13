@@ -12,7 +12,7 @@ from hypemm.models import PairConfig
 
 @pytest.fixture
 def default_config() -> StrategyConfig:
-    return StrategyConfig()
+    return StrategyConfig(pairs=(PairConfig("LINK", "SOL"),))
 
 
 @pytest.fixture

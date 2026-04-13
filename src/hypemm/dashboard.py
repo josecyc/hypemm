@@ -10,9 +10,9 @@ from rich.table import Table
 from rich.text import Text
 
 from hypemm.config import StrategyConfig
-from hypemm.math.pnl import compute_unrealized_pnl
+from hypemm.engine import StrategyEngine
+from hypemm.math import compute_unrealized_pnl
 from hypemm.models import CompletedTrade, Direction, OpenPosition, Signal
-from hypemm.strategy.engine import StrategyEngine
 
 
 def build_dashboard(

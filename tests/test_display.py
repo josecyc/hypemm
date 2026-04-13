@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 from hypemm.config import StrategyConfig
-from hypemm.dashboard.display import (
+from hypemm.dashboard import (
     _format_corr,
     _format_signal,
     _format_z,
     build_dashboard,
 )
+from hypemm.engine import StrategyEngine
 from hypemm.models import (
     CompletedTrade,
     Direction,
@@ -17,7 +18,6 @@ from hypemm.models import (
     PairConfig,
     Signal,
 )
-from hypemm.strategy.engine import StrategyEngine
 
 
 class TestBuildDashboard:
@@ -113,25 +113,31 @@ class TestFormatSignal:
             entry_time_ms=1000,
             entry_correlation=0.85,
         )
-        result = _format_signal(1.0, 0.8, pos, 0, StrategyConfig())
+        config = StrategyConfig(pairs=(PairConfig("LINK", "SOL"),))
+        result = _format_signal(1.0, 0.8, pos, 0, config)
         assert "in pos" in result
 
     def test_cooldown(self) -> None:
-        result = _format_signal(1.0, 0.8, None, 2, StrategyConfig())
+        config = StrategyConfig(pairs=(PairConfig("LINK", "SOL"),))
+        result = _format_signal(1.0, 0.8, None, 2, config)
         assert "cool" in result
 
     def test_corr_blocked(self) -> None:
-        result = _format_signal(2.5, 0.3, None, 0, StrategyConfig())
+        config = StrategyConfig(pairs=(PairConfig("LINK", "SOL"),))
+        result = _format_signal(2.5, 0.3, None, 0, config)
         assert "blocked" in result
 
     def test_short_signal(self) -> None:
-        result = _format_signal(2.5, 0.85, None, 0, StrategyConfig())
+        config = StrategyConfig(pairs=(PairConfig("LINK", "SOL"),))
+        result = _format_signal(2.5, 0.85, None, 0, config)
         assert "SHORT" in result
 
     def test_long_signal(self) -> None:
-        result = _format_signal(-2.5, 0.85, None, 0, StrategyConfig())
+        config = StrategyConfig(pairs=(PairConfig("LINK", "SOL"),))
+        result = _format_signal(-2.5, 0.85, None, 0, config)
         assert "LONG" in result
 
     def test_flat(self) -> None:
-        result = _format_signal(0.5, 0.85, None, 0, StrategyConfig())
+        config = StrategyConfig(pairs=(PairConfig("LINK", "SOL"),))
+        result = _format_signal(0.5, 0.85, None, 0, config)
         assert "flat" in result

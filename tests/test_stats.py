@@ -2,11 +2,10 @@
 
 from __future__ import annotations
 
-from hypemm.analysis.stats import (
+from hypemm.backtest import (
     _daily_pnl_dict,
     _intra_period_drawdown,
     compute_sharpe,
-    daily_equity,
     max_drawdown,
     monthly_breakdown,
 )
@@ -101,19 +100,6 @@ class TestMaxDrawdown:
             _make_trade(exit_ts=base_ts + 2 * 86_400_000, net_pnl=-300.0),
         ]
         assert max_drawdown(trades) == 800.0
-
-
-class TestDailyEquity:
-    def test_cumulative_pnl(self) -> None:
-        base_ts = 1_704_067_200_000
-        trades = [
-            _make_trade(exit_ts=base_ts, net_pnl=100.0),
-            _make_trade(exit_ts=base_ts + 86_400_000, net_pnl=200.0),
-        ]
-        equity = daily_equity(trades)
-        assert len(equity) == 2
-        assert equity[0]["cumulative_pnl"] == 100.0
-        assert equity[1]["cumulative_pnl"] == 300.0
 
 
 class TestHelpers:
