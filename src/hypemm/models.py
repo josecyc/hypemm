@@ -166,3 +166,16 @@ class SweepRow:
     daily: float
     max_dd: float
     sharpe: float
+
+
+@dataclass(frozen=True)
+class GateResult:
+    """Outcome of a single validation gate."""
+
+    gate: str
+    passed: bool
+    detail: str
+
+    @property
+    def verdict(self) -> str:
+        return "PASS" if self.passed else "FAIL"

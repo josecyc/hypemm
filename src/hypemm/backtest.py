@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 import numpy as np
 import pandas as pd
 
-from hypemm.config import StrategyConfig, SweepConfig
+from hypemm.config import GateConfig, StrategyConfig, SweepConfig
 from hypemm.engine import StrategyEngine
 from hypemm.math import (
     compute_leg_pnl,
@@ -22,6 +22,7 @@ from hypemm.models import (
     CompletedTrade,
     EntryOrder,
     ExitOrder,
+    GateResult,
     PairConfig,
     Signal,
     SweepRow,
@@ -301,3 +302,14 @@ def _intra_period_drawdown(pnl_sequence: list[float]) -> float:
         if dd > max_dd:
             max_dd = dd
     return max_dd
+
+
+# -- Gate 1: Backtest --
+
+
+def check_backtest_gate(result: BacktestResult, gate_config: GateConfig) -> GateResult:
+    """Check whether backtest results pass the gate."""
+    passed = result.sharpe >= gate_config.min_sharpe
+    detail = f"sharpe={result.sharpe:.2f}, required={gate_config.min_sharpe}"
+    logger.info("Backtest gate: %s (%s)", "PASS" if passed else "FAIL", detail)
+    return GateResult(gate="backtest", passed=passed, detail=detail)

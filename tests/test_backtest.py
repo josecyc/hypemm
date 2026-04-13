@@ -5,9 +5,9 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from hypemm.backtest import run_backtest
-from hypemm.config import StrategyConfig
-from hypemm.models import PairConfig
+from hypemm.backtest import check_backtest_gate, run_backtest
+from hypemm.config import GateConfig, StrategyConfig
+from hypemm.models import BacktestResult, PairConfig
 
 
 def test_backtest_produces_trades_on_divergent_data() -> None:
@@ -74,3 +74,20 @@ def test_backtest_trade_pnl_has_costs() -> None:
     for trade in trades:
         assert trade.cost > 0
         assert trade.net_pnl < trade.gross_pnl
+
+
+def test_check_backtest_gate_pass() -> None:
+    result = BacktestResult(
+        trades=[], total_net=0, win_rate=0, sharpe=1.5, max_drawdown=0, monthly=[]
+    )
+    gate = check_backtest_gate(result, GateConfig(min_sharpe=1.0))
+    assert gate.passed is True
+    assert gate.gate == "backtest"
+
+
+def test_check_backtest_gate_fail() -> None:
+    result = BacktestResult(
+        trades=[], total_net=0, win_rate=0, sharpe=0.5, max_drawdown=0, monthly=[]
+    )
+    gate = check_backtest_gate(result, GateConfig(min_sharpe=1.0))
+    assert gate.passed is False

@@ -10,6 +10,11 @@ from pathlib import Path
 from hypemm.config import load_config
 
 
+def _write_report(path: Path, data: dict[str, object]) -> None:
+    with open(path, "w") as f:
+        json.dump(data, f, indent=2, default=str)
+
+
 def _setup_logging() -> None:
     logging.basicConfig(
         level=logging.INFO,
@@ -27,14 +32,14 @@ def cmd_fetch(args: argparse.Namespace) -> None:
 
 
 def cmd_backtest(args: argparse.Namespace) -> None:
-    """Run backtest, optionally sweeping parameters."""
+    """Run backtest with Gate 1 (Sharpe) and Gate 2 (correlation) checks."""
     from hypemm.backtest import (
-        compute_sharpe,
-        max_drawdown,
-        monthly_breakdown,
+        check_backtest_gate,
         run_backtest_all_pairs,
         run_parameter_sweep,
+        summarize_backtest,
     )
+    from hypemm.correlation import check_correlation_gate, compute_correlation_stability
     from hypemm.data import load_candles
 
     app = load_config(Path(args.config))
@@ -49,22 +54,17 @@ def cmd_backtest(args: argparse.Namespace) -> None:
     logging.info("%d hourly bars, %d days", len(prices), n_days)
 
     trades = run_backtest_all_pairs(prices, config)
-    net = sum(t.net_pnl for t in trades)
-    sharpe = compute_sharpe(trades)
-    dd = max_drawdown(trades)
-    wr = sum(1 for t in trades if t.net_pnl > 0) / len(trades) * 100 if trades else 0
+    bt_result = summarize_backtest(trades, prices)
 
     logging.info(
         "TOTAL: %d trades, %.0f%% WR, $%+,.0f, Sharpe %.2f, Max DD $%,.0f",
         len(trades),
-        wr,
-        net,
-        sharpe,
-        dd,
+        bt_result.win_rate,
+        bt_result.total_net,
+        bt_result.sharpe,
+        bt_result.max_drawdown,
     )
-
-    months = monthly_breakdown(trades)
-    for m in months:
+    for m in bt_result.monthly:
         logging.info(
             "%s: %s trades, $%+,.0f net",
             m["month"],
@@ -72,39 +72,71 @@ def cmd_backtest(args: argparse.Namespace) -> None:
             float(str(m["net"])),
         )
 
+    gate1 = check_backtest_gate(bt_result, app.gates)
+    logging.info("Gate 1 (Backtest): %s", gate1.detail)
+
+    regimes, breakdowns = compute_correlation_stability(prices, config)
+    gate2 = check_correlation_gate(regimes, breakdowns, app.gates)
+    logging.info("Gate 2 (Correlation): %s", gate2.detail)
+
     app.infra.reports_dir.mkdir(parents=True, exist_ok=True)
-    summary = {
-        "total_trades": len(trades),
-        "total_net": net,
-        "win_rate": wr,
-        "sharpe": sharpe,
-        "max_drawdown": dd,
-        "monthly": months,
-        "verdict": "PASS" if sharpe >= app.gates.min_sharpe else "FAIL",
-    }
-    with open(app.infra.reports_dir / "backtest_summary.json", "w") as f:
-        json.dump(summary, f, indent=2, default=str)
+    _write_report(
+        app.infra.reports_dir / "backtest_summary.json",
+        {
+            "total_trades": len(trades),
+            "total_net": bt_result.total_net,
+            "win_rate": bt_result.win_rate,
+            "sharpe": bt_result.sharpe,
+            "max_drawdown": bt_result.max_drawdown,
+            "monthly": bt_result.monthly,
+            "verdict": gate1.verdict,
+        },
+    )
+    _write_report(
+        app.infra.reports_dir / "correlation_analysis.json",
+        {
+            "regimes": regimes,
+            "breakdowns": breakdowns,
+            "verdict": gate2.verdict,
+        },
+    )
 
 
 def cmd_validate(args: argparse.Namespace) -> None:
-    """Run validation gates."""
-    from hypemm.data import load_candles
-    from hypemm.validate import run_validation
+    """Run Gate 3 (orderbook) and produce final GO/NO-GO verdict."""
+    from hypemm.validate import (
+        check_orderbook_gate,
+        collect_orderbook_data,
+        run_synthesis,
+    )
 
     app = load_config(Path(args.config))
-    config = app.strategy
-    prices = load_candles(app.infra.candles_dir, config.all_coins)
+    reports = app.infra.reports_dir
 
-    results = run_validation(prices, config, app.infra, app.gates)
-    n_pass = sum(1 for g in results if g.passed)
-    n_total = len(results)
+    required = ["backtest_summary.json", "correlation_analysis.json"]
+    missing = [f for f in required if not (reports / f).exists()]
+    if missing:
+        logging.error(
+            "Missing prerequisite files: %s. Run 'hypemm backtest' first.",
+            ", ".join(missing),
+        )
+        raise SystemExit(1)
 
-    if n_pass == 3:
-        logging.info("Final verdict: GO (%d/%d gates passed)", n_pass, n_total)
-    elif n_pass == 0:
-        logging.info("Final verdict: NO-GO (%d/%d gates passed)", n_pass, n_total)
-    else:
-        logging.info("Final verdict: CONDITIONAL (%d/%d gates passed)", n_pass, n_total)
+    logging.info("=== Gate 3: Orderbook ===")
+    coin_stats, pair_viability = collect_orderbook_data(app.strategy, app.infra, app.gates)
+    gate3 = check_orderbook_gate(coin_stats, pair_viability, app.gates)
+
+    _write_report(
+        reports / "orderbook_analysis.json",
+        {
+            "coin_stats": {k: dict(v) for k, v in coin_stats.items()},
+            "pair_viability": pair_viability,
+            "verdict": gate3.verdict,
+        },
+    )
+
+    overall = run_synthesis(reports)
+    logging.info("Final verdict: %s", overall)
 
 
 def cmd_run(args: argparse.Namespace) -> None:
