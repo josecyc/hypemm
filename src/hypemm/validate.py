@@ -136,7 +136,7 @@ def collect_orderbook_data(
             "n_snapshots": len(snaps),
         }
         logger.info(
-            "%s: spread=%.1f bps, depth@10bps=$%,.0f, rating=%s",
+            "%s: spread=%.1f bps, depth@10bps=$%.0f, rating=%s",
             coin,
             avg_spread,
             depths.get(10, 0),

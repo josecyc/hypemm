@@ -57,7 +57,7 @@ def cmd_backtest(args: argparse.Namespace) -> None:
     bt_result = summarize_backtest(trades, prices)
 
     logging.info(
-        "TOTAL: %d trades, %.0f%% WR, $%+,.0f, Sharpe %.2f, Max DD $%,.0f",
+        "TOTAL: %d trades, %.0f%% WR, $%+.0f, Sharpe %.2f, Max DD $%.0f",
         len(trades),
         bt_result.win_rate,
         bt_result.total_net,
@@ -66,7 +66,7 @@ def cmd_backtest(args: argparse.Namespace) -> None:
     )
     for m in bt_result.monthly:
         logging.info(
-            "%s: %s trades, $%+,.0f net",
+            "%s: %s trades, $%+.0f net",
             m["month"],
             m["trades"],
             float(str(m["net"])),

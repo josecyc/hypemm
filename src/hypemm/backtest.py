@@ -99,7 +99,7 @@ def run_backtest_all_pairs(
         net = sum(t.net_pnl for t in trades)
         wr = wins / len(trades) * 100 if trades else 0
         logger.info(
-            "%s: %d trades, %.0f%% WR, $%+,.0f",
+            "%s: %d trades, %.0f%% WR, $%+.0f",
             pair.label,
             len(trades),
             wr,
@@ -203,7 +203,7 @@ def run_parameter_sweep(
             )
 
             logger.info(
-                "  lb=%dh z=%.1f: %d trades, %.0f%% WR, $%+,.0f, Sharpe %.2f",
+                "  lb=%dh z=%.1f: %d trades, %.0f%% WR, $%+.0f, Sharpe %.2f",
                 lb,
                 ze,
                 len(trades),
