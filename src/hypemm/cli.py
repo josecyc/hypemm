@@ -24,11 +24,13 @@ def _setup_logging() -> None:
 
 
 def cmd_fetch(args: argparse.Namespace) -> None:
-    """Fetch candle data from Hyperliquid."""
+    """Fetch candle and funding data from Hyperliquid."""
     from hypemm.data import fetch_all_candles
+    from hypemm.funding import fetch_all_funding
 
     app = load_config(Path(args.config))
     fetch_all_candles(app.strategy.all_coins, app.infra, force=args.force)
+    fetch_all_funding(app.strategy.all_coins, app.infra, force=args.force)
 
 
 def cmd_backtest(args: argparse.Namespace) -> None:
@@ -41,19 +43,21 @@ def cmd_backtest(args: argparse.Namespace) -> None:
     )
     from hypemm.correlation import check_correlation_gate, compute_correlation_stability
     from hypemm.data import load_candles
+    from hypemm.funding import load_funding
 
     app = load_config(Path(args.config))
     config = app.strategy
     prices = load_candles(app.infra.candles_dir, config.all_coins)
+    funding = load_funding(app.infra.funding_dir, config.all_coins)
 
     if args.sweep:
-        run_parameter_sweep(prices, config, sweep=app.sweep)
+        run_parameter_sweep(prices, config, sweep=app.sweep, funding=funding)
         return
 
     n_days = (prices.index[-1] - prices.index[0]).days
     logging.info("%d hourly bars, %d days", len(prices), n_days)
 
-    trades = run_backtest_all_pairs(prices, config)
+    trades = run_backtest_all_pairs(prices, config, funding=funding)
     bt_result = summarize_backtest(trades, prices)
 
     logging.info(

@@ -11,6 +11,7 @@ import pandas as pd
 
 from hypemm.config import GateConfig, StrategyConfig, SweepConfig
 from hypemm.engine import StrategyEngine
+from hypemm.funding import compute_funding_cost
 from hypemm.math import (
     compute_leg_pnl,
     compute_log_ratios,
@@ -38,8 +39,12 @@ def run_backtest(
     prices: pd.DataFrame,
     pair: PairConfig,
     config: StrategyConfig,
+    funding: pd.DataFrame | None = None,
 ) -> list[CompletedTrade]:
-    """Run full backtest on one pair using the strategy engine."""
+    """Run full backtest on one pair using the strategy engine.
+
+    If funding is provided, deducts per-hour funding cost from each trade's net_pnl.
+    """
     pa = prices[pair.coin_a].values
     pb = prices[pair.coin_b].values
     timestamps = prices.index
@@ -51,6 +56,9 @@ def run_backtest(
     log_ratios = compute_log_ratios(np.asarray(pa), np.asarray(pb))
     z_scores = compute_z_scores(log_ratios, config.lookback_hours)
     corr_values = _compute_rolling_corr(pa, pb, config.corr_window_hours)
+
+    funding_a = funding[pair.coin_a] if funding is not None else None
+    funding_b = funding[pair.coin_b] if funding is not None else None
 
     engine = StrategyEngine(replace(config, pairs=(pair,)))
     completed: list[CompletedTrade] = []
@@ -81,6 +89,16 @@ def run_backtest(
             elif isinstance(order, ExitOrder):
                 trade = engine.confirm_exit(order, float(pa[i]), float(pb[i]), ts_ms)
                 trade = _add_mae(trade, pa, pb, i, engine.config)
+                if funding_a is not None and funding_b is not None:
+                    fc = compute_funding_cost(
+                        trade.direction,
+                        config.notional_per_leg,
+                        trade.entry_ts,
+                        trade.exit_ts,
+                        funding_a,
+                        funding_b,
+                    )
+                    trade = replace(trade, funding_cost=fc, net_pnl=trade.net_pnl - fc)
                 completed.append(trade)
 
     return completed
@@ -89,11 +107,12 @@ def run_backtest(
 def run_backtest_all_pairs(
     prices: pd.DataFrame,
     config: StrategyConfig,
+    funding: pd.DataFrame | None = None,
 ) -> list[CompletedTrade]:
     """Run backtest across all configured pairs."""
     all_trades: list[CompletedTrade] = []
     for pair in config.pairs:
-        trades = run_backtest(prices, pair, config)
+        trades = run_backtest(prices, pair, config, funding=funding)
         all_trades.extend(trades)
         wins = sum(1 for t in trades if t.net_pnl > 0)
         net = sum(t.net_pnl for t in trades)
@@ -168,6 +187,7 @@ def run_parameter_sweep(
     sweep: SweepConfig | None = None,
     lookbacks: list[int] | None = None,
     entry_zs: list[float] | None = None,
+    funding: pd.DataFrame | None = None,
 ) -> list[SweepRow]:
     """Run backtest across parameter grid. Returns list of SweepRow results."""
     defaults = sweep or SweepConfig()
@@ -179,7 +199,7 @@ def run_parameter_sweep(
     for lb in lookbacks:
         for ze in entry_zs:
             config = replace(base_config, lookback_hours=lb, entry_z=ze)
-            trades = run_backtest_all_pairs(prices, config)
+            trades = run_backtest_all_pairs(prices, config, funding=funding)
 
             net = sum(t.net_pnl for t in trades)
             wins = sum(1 for t in trades if t.net_pnl > 0)

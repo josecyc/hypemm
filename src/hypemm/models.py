@@ -94,6 +94,7 @@ class CompletedTrade:
     net_pnl: float
     exit_reason: ExitReason
     entry_correlation: float
+    funding_cost: float = 0.0
     max_adverse_excursion: float = 0.0
 
 

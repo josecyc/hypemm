@@ -89,6 +89,7 @@ TRADE_FIELDS = [
     "net_pnl",
     "exit_reason",
     "entry_correlation",
+    "funding_cost",
     "max_adverse_excursion",
 ]
 
@@ -137,6 +138,7 @@ def load_trades(path: Path) -> list[CompletedTrade]:
                     net_pnl=float(row["net_pnl"]),
                     exit_reason=ExitReason(row["exit_reason"]),
                     entry_correlation=float(row["entry_correlation"]),
+                    funding_cost=float(row.get("funding_cost", "0")),
                     max_adverse_excursion=float(row.get("max_adverse_excursion", "0")),
                 )
             )

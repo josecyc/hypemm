@@ -54,6 +54,10 @@ class InfraConfig:
         return self.data_dir / "candles"
 
     @property
+    def funding_dir(self) -> Path:
+        return self.data_dir / "funding"
+
+    @property
     def reports_dir(self) -> Path:
         return self.data_dir / "reports"
 
