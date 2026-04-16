@@ -439,20 +439,14 @@ uv run hypemm fetch
 uv run hypemm backtest
 
 # Parameter sweep across lookback/entry-z grid
-uv run hypemm sweep
+uv run hypemm backtest --sweep
 
-# Correlation stability analysis
-uv run hypemm correlation
-
-# Live orderbook depth analysis (Gate 3, 2 hours of snapshots)
-uv run hypemm orderbook
-
-# Go/no-go synthesis from all analysis steps
-uv run hypemm synthesize
+# Run validation (Gate 3: live orderbook) and synthesize final verdict
+uv run hypemm validate
 
 # Start paper trading
-uv run hypemm paper
-uv run hypemm paper --fresh  # ignore saved state
+uv run hypemm run
+uv run hypemm run --fresh  # ignore saved state
 
 # Paper trading on server (tmux)
 ssh server "cd ~/hypemm && tmux attach -t hype_mm"

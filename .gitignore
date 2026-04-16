@@ -12,3 +12,4 @@ data/
 .ruff_cache/
 uv.lock
 edge_log_*.csv
+.ipynb_checkpoints/

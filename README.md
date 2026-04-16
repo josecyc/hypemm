@@ -16,26 +16,17 @@ uv sync
 # Fetch historical candle data
 uv run hypemm fetch
 
-# Run full backtest (7 months, all pairs)
+# Run backtest
 uv run hypemm backtest
 
-# Parameter sweep across lookback/entry-z grid
-uv run hypemm sweep
-
-# Correlation stability analysis
-uv run hypemm correlation
-
-# Live orderbook depth analysis (2 hours of snapshots)
-uv run hypemm orderbook
-
-# Go/no-go synthesis from all analysis steps
-uv run hypemm synthesize
+# Run validation gates
+uv run hypemm validate
 
 # Start paper trading
-uv run hypemm paper
+uv run hypemm run
 
 # Paper trade ignoring saved state
-uv run hypemm paper --fresh
+uv run hypemm run --fresh
 ```
 
 ## Strategy
@@ -52,16 +43,21 @@ See [THESIS.md](THESIS.md) for the full research path and results.
 
 ```
 src/hypemm/
-  models.py         Domain dataclasses (Signal, CompletedTrade, etc.)
-  config.py         Strategy + infrastructure configuration
-  math/             Pure functions: z-score, correlation, P&L
-  strategy/         Core engine (entry/exit logic) + signal computation
-  data/             Candle fetching, CSV loading, hourly price buffer
-  execution/        Paper (and future live) execution adapters
-  persistence/      State save/load, trade CSV logging
-  dashboard/        Rich terminal UI
-  analysis/         Backtest, stats, sweep, correlation, orderbook, synthesis
-  cli/              CLI entry points
+  cli.py            CLI entry points
+  config.py         Strategy and infrastructure configuration
+  models.py         Domain dataclasses
+  data.py           Candle fetching and CSV loading
+  signals.py        Z-score and entry signal generation
+  engine.py         Core strategy engine
+  backtest.py       Backtest and sweep orchestration
+  correlation.py    Correlation analysis and validation helpers
+  funding.py        Funding-rate integration
+  runner.py         Paper-trading orchestration
+  dashboard.py      Rich terminal UI
+  execution.py      Execution adapters
+  persistence.py    State save/load and trade logs
+  math.py           Shared stat and PnL helpers
+  validate.py       Validation gate pipeline
 ```
 
 The strategy engine is mode-agnostic: it processes signals and returns orders. The backtest, paper trader, and future live system all use the same engine with different orchestrators and execution adapters.
