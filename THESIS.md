@@ -238,10 +238,99 @@ Both losses were on BTC/SOL, which has the weakest backtest performance of the 4
 
 - Backtest worst monthly drawdown (with filter): $9,187
 - Backtest worst single trade: -$7,319 (48h time-stop)
-- Paper trading worst single trade: -$249
-- Paper trading worst unrealized: -$978 (BTC/SOL, eventually closed at -$249)
+- Backtest worst intra-trade MAE: -$7,602 (same trade, unrealized trough)
+- Backtest 95th percentile MAE: -$2,794
+- Backtest average MAE: -$678 (most trades barely go against us)
+- Backtest peak-to-trough drawdown: -$38,442 (unfiltered), -$11,749 (filtered)
+- Paper trading worst single trade: -$434
+- Paper trading worst unrealized (across all open positions): -$1,001
 
-### 5.3 What the correlation filter prevents
+### 5.3 Liquidation risk analysis
+
+This is a long-short market-neutral strategy: each trade has one long leg and one short leg of equal notional. On Hyperliquid, both legs use the same cross-margin pool. The critical question: how much can positions go against us simultaneously before liquidation?
+
+**5.3.1 Hyperliquid margin mechanics**
+
+| Coin | Max Leverage | Initial Margin | Maintenance Margin |
+|------|-------------|----------------|-------------------|
+| BTC, ETH | 50x | 2.0% | 1.0% |
+| SOL, HYPE | 20x | 5.0% | 2.5% |
+| LINK, DOGE, AVAX | 10x | 10.0% | 5.0% |
+
+Liquidation occurs when equity falls below the sum of maintenance margin requirements across all open positions.
+
+**5.3.2 Notional and margin by leverage (all 4 pairs open, max case)**
+
+| Pairs | Notional | Notional (2 legs × $50K × 4 pairs) | Initial Margin (5x) | Maint. Margin (~4% avg) |
+|-------|----------|-----------------------------------|-------------------|------------------------|
+| 1 pair | $100K | 2 legs | $20K | $4K |
+| 4 pairs | $400K | 8 legs | $80K | $16K |
+
+**5.3.3 Simultaneous drawdown from backtest**
+
+From the full backtest, tracking hour-by-hour concurrent MAE across all open positions:
+
+| Metric | Value |
+|--------|-------|
+| Max concurrent positions | 6 (rare — 3.3% of time) |
+| Max simultaneous unrealized loss | **-$22,976** (at $600K notional, Sep 22 2025) |
+| Paper trading max combined unrealized | -$1,001 (Apr 14, 2026) |
+| Worst single day P&L | -$18,343 (Sep 24 2025 — during correlation breakdown) |
+
+Concurrent position distribution:
+- 0 positions: 7% of time
+- 1-2 positions: 39% of time
+- 3-4 positions: 40% of time
+- 5-6 positions: 14% of time
+
+**5.3.4 Capital requirements by leverage (4 pairs, $50K per leg)**
+
+| Leverage | Initial Margin | Max Loss Before Liquidation | Stress Test Pass? |
+|----------|---------------|----------------------------|-------------------|
+| 1x | $400,000 | $392,000 (before maint.) | ✅ Unlimited |
+| 2x | $200,000 | $184,000 | ✅ 8x worst-case |
+| 3x | $133,000 | $117,000 | ✅ 5x worst-case |
+| **5x** | **$80,000** | **$64,000** | **✅ 2.8x worst-case** |
+| 7x | $57,000 | $41,000 | ⚠️ 1.8x worst-case |
+| 10x | $40,000 | $24,000 | ❌ Just above worst-case |
+| 15x | $27,000 | $11,000 | ❌ Below worst-case |
+| 20x | $20,000 | $4,000 | ❌ Would liquidate |
+
+Worst-case benchmark: -$22,976 (max concurrent simultaneous MAE from 7-month backtest).
+
+**5.3.5 Recommended account capitalization**
+
+The gap between initial margin and liquidation threshold is your survival buffer. We recommend:
+
+| Goal | Leverage | Margin | Buffer | Total Capital | Rationale |
+|------|----------|--------|--------|---------------|-----------|
+| Conservative | 3x | $133K | $50K buffer | **$183K** | 5x buffer vs worst-case |
+| Balanced | 5x | $80K | $40K buffer | **$120K** | 2.8x buffer, matches paper trading plan |
+| Aggressive | 7x | $57K | $20K buffer | **$77K** | 1.8x buffer, higher liquidation risk |
+| Danger | 10x+ | <$40K | <$15K | **Not recommended** | Worst-case would liquidate |
+
+**Balanced ($120K) is the recommendation** — enough buffer to survive the backtest's worst concurrent drawdown with ~40% safety margin, plus room for unrealized swings beyond the historical worst-case.
+
+**5.3.6 Key liquidation risks specific to this strategy**
+
+1. **Correlation breakdown** (highest risk): All 4 positions can simultaneously go underwater if correlations collapse mid-trade (like BTC/SOL on Apr 1 — corr dropped 0.84 → 0.06 in one hour). The filter prevents NEW entries but doesn't close EXISTING positions.
+
+2. **Regime shift during max exposure**: Worst-case was 6 positions open with $22.9K MAE during the September 2025 correlation event. A deeper breakdown than we've seen could exceed this.
+
+3. **Intra-hour adverse moves**: Our 48h time-stop and ±4.0 z stop-loss fire only on hourly boundaries. A flash crash could push z past ±4 and back before we'd exit.
+
+4. **Funding rate accumulation**: Positions held 48h on thin pairs (AVAX) can accumulate meaningful funding costs. Not modeled in backtest.
+
+**5.3.7 Stress test beyond backtest**
+
+The backtest covers 7 months. True tail events (100-year floods) could be 2-3x worse than historical maximum. At 5x leverage with $120K:
+- Backtest worst: $23K (we lose 29% of margin buffer, survive)
+- 2x backtest worst: $46K (we lose 58% of buffer, still survive)
+- 3x backtest worst: $69K (we're 14% above liquidation threshold — close call)
+
+Recommendation: Monitor concurrent unrealized daily. If we hit 50% of the backtest worst-case ($11K combined unrealized), halve position sizes. If we hit 100% ($23K), exit all positions manually.
+
+### 5.4 What the correlation filter prevents
 
 Without the filter, the September 2025 backtest lost $30,022 in one month. With the filter, the same month lost $2,640. During paper trading, the filter blocked entries for 4+ days during the Apr 1-6 correlation breakdown — correctly preventing what would have been losing trades.
 
@@ -249,20 +338,37 @@ Without the filter, the September 2025 backtest lost $30,022 in one month. With 
 
 ### 6.1 At $50K per leg (backtest calibration)
 
-| Leverage | Capital Required | Annual P&L (backtest) | APR |
-|----------|-----------------|----------------------|-----|
-| 1x | $400,000 | ~$180,000 | 45% |
-| 3x | $133,000 | ~$180,000 | 135% |
-| 5x | $80,000 | ~$180,000 | 225% |
+| Leverage | Margin | Buffer (vs worst MAE) | Capital Required | Annual P&L (backtest) | APR on Capital |
+|----------|--------|----------------------|------------------|----------------------|----------------|
+| 1x | $400K | ∞ | **$400K** | ~$180K | 45% |
+| 3x | $133K | $50K | **$183K** | ~$180K | 98% |
+| 5x | $80K | $40K | **$120K** | ~$180K | 150% |
+| 7x | $57K | $20K | **$77K** | ~$180K | 234% |
+| 10x | $40K | Below worst-case | Not recommended | — | — |
+
+"Capital Required" = initial margin + safety buffer. Safety buffer sized to survive the backtest's worst simultaneous unrealized loss (-$22,976) with 2-5x cushion depending on risk tolerance.
+
+**Recommended: $120K at 5x leverage** — optimal risk/reward balance.
 
 ### 6.2 Recommended deployment path
 
-| Phase | Per Leg | Exposure | Capital (5x) | Duration |
-|-------|---------|----------|-------------|----------|
-| Paper trade | $50K | $400K | $0 | 2 weeks (in progress) |
-| Live test | $5K | $40K | $15K | 2 weeks |
-| Scale up | $25K | $200K | $60K | 2 weeks |
-| Full size | $50K | $400K | $120K | Ongoing |
+| Phase | Per Leg | Exposure | Margin (5x) | Capital | Duration |
+|-------|---------|----------|-------------|---------|----------|
+| Paper trade | $50K | $400K | $0 | $0 | 2 weeks (in progress) |
+| Live test | $5K | $40K | $8K | $15K | 2 weeks |
+| Scale up | $25K | $200K | $40K | $60K | 2 weeks |
+| Full size | $50K | $400K | $80K | **$120K** | Ongoing |
+
+### 6.3 Liquidation risk at each leverage level
+
+Based on the $22,976 max simultaneous unrealized loss observed in the 7-month backtest:
+
+| Leverage | Capital | Worst-case loss as % of buffer | Survive historical worst? | Survive 2x worst? | Survive 3x worst? |
+|----------|---------|------------------------------|--------------------------|-------------------|-------------------|
+| 3x | $183K | 46% | ✅ | ✅ | ✅ |
+| 5x | $120K | 58% | ✅ | ✅ | ⚠️ close |
+| 7x | $77K | 115% | ⚠️ close | ❌ | ❌ |
+| 10x | $40K | 570%+ | ❌ | ❌ | ❌ |
 
 ### 6.3 Paper trading vs backtest comparison
 
