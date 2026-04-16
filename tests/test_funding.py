@@ -11,12 +11,13 @@ import pytest
 
 from hypemm.funding import (
     _save_csv,
+    accrue_hourly_funding,
     compute_funding_cost,
     fetch_coin_funding,
     fetch_funding_page,
     load_funding,
 )
-from hypemm.models import Direction
+from hypemm.models import Direction, OpenPosition, PairConfig
 
 
 def _make_response(records: list[dict[str, Any]]) -> MagicMock:
@@ -176,3 +177,47 @@ class TestComputeFundingCost:
         b = self._series(base, [0.001, 0.001])
         with pytest.raises(ValueError, match="Funding data gap"):
             compute_funding_cost(Direction.LONG_RATIO, 50_000, base, base + 3 * 3_600_000, a, b)
+
+
+class TestAccrueHourlyFunding:
+    @staticmethod
+    def _make_position(direction: Direction) -> OpenPosition:
+        return OpenPosition(
+            pair=PairConfig("BTC", "ETH"),
+            direction=direction,
+            entry_z=-2.5,
+            entry_price_a=100.0,
+            entry_price_b=10.0,
+            entry_time_ms=0,
+            entry_correlation=0.9,
+        )
+
+    def test_long_ratio_accrues_rate_a_minus_rate_b(self) -> None:
+        pos = self._make_position(Direction.LONG_RATIO)
+        positions: dict[str, OpenPosition | None] = {pos.pair.label: pos}
+        accrue_hourly_funding(positions, {"BTC": 0.0002, "ETH": 0.0001}, notional=50_000)
+        assert pos.funding_paid == pytest.approx(50_000 * (0.0002 - 0.0001))
+
+    def test_short_ratio_accrues_rate_b_minus_rate_a(self) -> None:
+        pos = self._make_position(Direction.SHORT_RATIO)
+        positions: dict[str, OpenPosition | None] = {pos.pair.label: pos}
+        accrue_hourly_funding(positions, {"BTC": 0.0002, "ETH": 0.0001}, notional=50_000)
+        assert pos.funding_paid == pytest.approx(50_000 * (0.0001 - 0.0002))
+
+    def test_accrues_additively_across_calls(self) -> None:
+        pos = self._make_position(Direction.LONG_RATIO)
+        positions: dict[str, OpenPosition | None] = {pos.pair.label: pos}
+        for _ in range(3):
+            accrue_hourly_funding(positions, {"BTC": 0.0002, "ETH": 0.0001}, notional=50_000)
+        assert pos.funding_paid == pytest.approx(3 * 50_000 * (0.0002 - 0.0001))
+
+    def test_skips_position_with_missing_rate(self) -> None:
+        pos = self._make_position(Direction.LONG_RATIO)
+        positions: dict[str, OpenPosition | None] = {pos.pair.label: pos}
+        accrue_hourly_funding(positions, {"BTC": 0.0002}, notional=50_000)  # ETH missing
+        assert pos.funding_paid == 0.0
+
+    def test_skips_none_positions(self) -> None:
+        positions: dict[str, OpenPosition | None] = {"BTC/ETH": None}
+        accrue_hourly_funding(positions, {"BTC": 0.0002, "ETH": 0.0001}, notional=50_000)
+        assert positions["BTC/ETH"] is None

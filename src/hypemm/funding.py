@@ -12,7 +12,7 @@ import httpx
 import pandas as pd
 
 from hypemm.config import InfraConfig
-from hypemm.models import DataFetchError, Direction
+from hypemm.models import DataFetchError, Direction, OpenPosition
 
 logger = logging.getLogger(__name__)
 
@@ -249,3 +249,51 @@ def compute_funding_cost(
     if direction == Direction.LONG_RATIO:
         return notional * (sum_a - sum_b)
     return notional * (sum_b - sum_a)
+
+
+def fetch_latest_funding_rates(
+    client: httpx.Client,
+    url: str,
+    coins: list[str],
+) -> dict[str, float]:
+    """Fetch the most recent funding rate for each coin. Returns {coin: rate}.
+
+    Used by the live runner to accrue funding at each hourly boundary.
+    Skips coins with no recent record and logs a warning — callers must tolerate
+    missing keys. Records are looked up in a 3-hour window to survive brief gaps.
+    """
+    now_ms = int(time.time() * 1000)
+    start_ms = now_ms - 3 * 3_600_000
+    rates: dict[str, float] = {}
+    for coin in coins:
+        page = fetch_funding_page(client, url, coin, start_ms)
+        if not page:
+            logger.warning("No recent funding record for %s", coin)
+            continue
+        rates[coin] = float(page[-1]["funding_rate"])
+    return rates
+
+
+def accrue_hourly_funding(
+    positions: dict[str, OpenPosition | None],
+    rates: dict[str, float],
+    notional: float,
+) -> None:
+    """Add one hour of funding to each open position's funding_paid."""
+    for pos in positions.values():
+        if pos is None:
+            continue
+        rate_a = rates.get(pos.pair.coin_a)
+        rate_b = rates.get(pos.pair.coin_b)
+        if rate_a is None or rate_b is None:
+            logger.warning(
+                "Skipping funding accrual for %s: missing rate for %s or %s",
+                pos.pair.label,
+                pos.pair.coin_a,
+                pos.pair.coin_b,
+            )
+            continue
+        if pos.direction == Direction.LONG_RATIO:
+            pos.funding_paid += notional * (rate_a - rate_b)
+        else:
+            pos.funding_paid += notional * (rate_b - rate_a)

@@ -66,6 +66,7 @@ class OpenPosition:
     entry_time_ms: int
     entry_correlation: float
     hours_held: int = 0
+    funding_paid: float = 0.0
 
     @property
     def direction_str(self) -> str:

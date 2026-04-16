@@ -188,6 +188,7 @@ class StrategyEngine:
                     "entry_time_ms": pos.entry_time_ms,
                     "entry_correlation": pos.entry_correlation,
                     "hours_held": pos.hours_held,
+                    "funding_paid": pos.funding_paid,
                 }
             else:
                 positions_data[label] = None
@@ -221,6 +222,7 @@ class StrategyEngine:
                 entry_time_ms=int(pos_data["entry_time_ms"]),
                 entry_correlation=float(pos_data["entry_correlation"]),
                 hours_held=int(pos_data["hours_held"]),
+                funding_paid=float(pos_data.get("funding_paid", 0.0)),
             )
 
         cooldowns_data = state.get("cooldowns", {})

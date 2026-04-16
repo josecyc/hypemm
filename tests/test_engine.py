@@ -227,3 +227,46 @@ class TestStatePersistence:
         assert pos.direction == Direction.LONG_RATIO
         assert pos.entry_price_a == 15.0
         assert pos.hours_held == 0
+
+    def test_state_round_trip_preserves_funding_paid(self) -> None:
+        pair = PairConfig("LINK", "SOL")
+        engine = StrategyEngine(_config_with_pair(pair))
+
+        entry_sig = _make_signal(pair, z=-2.5, corr=0.85)
+        orders = engine.process_bar({pair.label: entry_sig}, timestamp_ms=1000)
+        pos = engine.confirm_entry(orders[0], 15.0, 150.0, 1000)  # type: ignore[arg-type]
+        pos.funding_paid = 12.34
+
+        state = engine.get_state()
+
+        engine2 = StrategyEngine(_config_with_pair(pair))
+        engine2.load_state(state)
+        restored = engine2.positions[pair.label]
+        assert restored is not None
+        assert restored.funding_paid == 12.34
+
+    def test_load_state_defaults_funding_paid_when_missing(self) -> None:
+        """Backward compat: state files written before funding_paid field exists."""
+        pair = PairConfig("LINK", "SOL")
+        engine = StrategyEngine(_config_with_pair(pair))
+        legacy_state = {
+            "positions": {
+                pair.label: {
+                    "coin_a": "LINK",
+                    "coin_b": "SOL",
+                    "direction": int(Direction.LONG_RATIO),
+                    "entry_z": -2.5,
+                    "entry_price_a": 15.0,
+                    "entry_price_b": 150.0,
+                    "entry_time_ms": 1000,
+                    "entry_correlation": 0.85,
+                    "hours_held": 2,
+                    # funding_paid intentionally missing
+                }
+            },
+            "cooldowns": {pair.label: 0},
+        }
+        engine.load_state(legacy_state)
+        pos = engine.positions[pair.label]
+        assert pos is not None
+        assert pos.funding_paid == 0.0
