@@ -1,56 +1,76 @@
-# hypemm — Hyperliquid RWA Market Making Edge Detector
+# hypemm -- Cross-Perp Statistical Arbitrage on Hyperliquid
 
-Real-time monitoring tool that compares Hyperliquid HIP-3 RWA spot orderbook spreads against Binance equivalents to identify market making opportunities.
+Trades mean-reversion of price ratios between correlated cryptocurrency perpetual futures on Hyperliquid. When two normally-correlated coins diverge significantly (measured by z-score), takes the opposite side and waits for convergence.
 
-**No API keys needed** — all data is read-only from public endpoints.
+**No API keys needed** -- all data is read-only from public endpoints.
 
 ## Setup
 
 ```bash
-pip install -r requirements.txt
-python monitor.py
+uv sync
 ```
 
-## What it monitors
+## Usage
 
-HIP-3 spot pairs on Hyperliquid (USDC denominated):
+```bash
+# Fetch historical candle data
+uv run hypemm fetch
 
-| Pair | Token | Binance Reference | Asset |
-|---|---|---|---|
-| @182 | XAUT0 | PAXGUSDT | Gold |
-| @265 | SLV | — | Silver |
-| @288 | QQQ | — | Nasdaq 100 |
-| @279 | SPY | — | S&P 500 |
-| @268 | AAPL | — | Apple |
-| @266 | GOOGL | — | Google |
-| @287 | META | — | Meta |
-| BTC | BTC (perp) | BTCUSDT | Control |
+# Run full backtest (7 months, all pairs)
+uv run hypemm backtest
 
-## Metrics
+# Parameter sweep across lookback/entry-z grid
+uv run hypemm sweep
 
-- **Spread (bps)** — bid-ask spread on both venues
-- **Ratio** — HL spread / Binance spread (higher = more MM edge)
-- **Edge** — theoretical max capture in bps
-- **Book depth** — USD liquidity at 5/10/25/50 bps from mid
-- **Trade frequency** — rolling 1m/5m/60m trade counts
-- **Volume imbalance** — buy/sell ratio (informed flow detector)
-- **Funding rate** — directional bias indicator (perps only)
+# Correlation stability analysis
+uv run hypemm correlation
 
-## Edge verdict
+# Live orderbook depth analysis (2 hours of snapshots)
+uv run hypemm orderbook
 
-- 🟢 **STRONG**: HL spread > 3x reference, >10 trades/min, depth < $200K
-- 🟡 **MODERATE/CHECK**: HL spread > 2x reference, >5 trades/min (or >15 bps absolute)
-- 🔴 **NONE**: Spread ratio < 1.5x or too few trades or too deep
+# Go/no-go synthesis from all analysis steps
+uv run hypemm synthesize
 
-## CSV logging
+# Start paper trading
+uv run hypemm paper
 
-Metrics are logged every 30 seconds to `edge_log_YYYYMMDD.csv` for historical pattern analysis.
+# Paper trade ignoring saved state
+uv run hypemm paper --fresh
+```
+
+## Strategy
+
+- **Pairs**: LINK/SOL, DOGE/AVAX, SOL/AVAX, BTC/SOL
+- **Entry**: z-score of log price ratio exceeds +/-2.0, with 7-day rolling correlation > 0.7
+- **Exit**: z-score reverts to +/-0.5, stop loss at +/-4.0, or 48h time stop
+- **Position sizing**: $50K per leg, 2 bps maker fee per side
+- **Evaluation cadence**: Hourly (matching backtest timescale)
+
+See [THESIS.md](THESIS.md) for the full research path and results.
 
 ## Architecture
 
-- `monitor.py` — main entry point, startup summary, orchestration
-- `feeds/hyperliquid.py` — HL WebSocket + REST (L2 books, trades, metadata)
-- `feeds/binance.py` — Binance futures WebSocket (depth snapshots)
-- `analysis.py` — spread calcs, edge scoring, market hours, alerts
-- `display.py` — Rich terminal UI
-- `logger.py` — CSV logging
+```
+src/hypemm/
+  models.py         Domain dataclasses (Signal, CompletedTrade, etc.)
+  config.py         Strategy + infrastructure configuration
+  math/             Pure functions: z-score, correlation, P&L
+  strategy/         Core engine (entry/exit logic) + signal computation
+  data/             Candle fetching, CSV loading, hourly price buffer
+  execution/        Paper (and future live) execution adapters
+  persistence/      State save/load, trade CSV logging
+  dashboard/        Rich terminal UI
+  analysis/         Backtest, stats, sweep, correlation, orderbook, synthesis
+  cli/              CLI entry points
+```
+
+The strategy engine is mode-agnostic: it processes signals and returns orders. The backtest, paper trader, and future live system all use the same engine with different orchestrators and execution adapters.
+
+## Development
+
+```bash
+uv run pytest                # Run tests
+uv run black .               # Format
+uv run ruff check .          # Lint
+uv run mypy src/             # Type check
+```

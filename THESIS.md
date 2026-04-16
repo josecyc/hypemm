@@ -426,37 +426,68 @@ Paper trading is running above backtest expectations, but the sample is small (1
 
 ## 7. Verification Pipeline
 
-All analysis is reproducible via the verification scripts:
+All analysis is reproducible via the `hypemm` CLI:
 
 ```bash
-# Fetch historical data
-python -m verification.fetch_data
+# Install dependencies
+uv sync
 
-# Run extended backtest (Step 1)
-python -m verification.step1_backtest
+# Fetch historical candle data + funding rates
+uv run hypemm fetch
 
-# Run with correlation filter
-python -m verification.step1b_filtered
+# Run full backtest (Gates 1-2: Sharpe, correlation stability)
+uv run hypemm backtest
 
-# Correlation stability analysis (Step 2)
-python -m verification.step2_correlation
+# Parameter sweep across lookback/entry-z grid
+uv run hypemm sweep
 
-# Orderbook depth analysis (Step 3)
-python -m verification.step3_orderbook
+# Correlation stability analysis
+uv run hypemm correlation
 
-# Final synthesis
-python -m verification.synthesize
+# Live orderbook depth analysis (Gate 3, 2 hours of snapshots)
+uv run hypemm orderbook
 
-# Paper trading (on server)
+# Go/no-go synthesis from all analysis steps
+uv run hypemm synthesize
+
+# Start paper trading
+uv run hypemm paper
+uv run hypemm paper --fresh  # ignore saved state
+
+# Paper trading on server (tmux)
 ssh server "cd ~/hypemm && tmux attach -t hype_mm"
+```
+
+Risk analysis notebooks (Jupyter):
+- `verification/risk_analysis.ipynb` — API data (~7 months)
+- `verification/risk_analysis_reservoir.ipynb` — Reservoir data (~8 months)
+
+Both produce cumulative P&L curves, drawdown visualizations, simultaneous unrealized time series, and daily P&L tables. Re-run with:
+```bash
+uv run jupyter nbconvert --to notebook --execute verification/risk_analysis.ipynb --output risk_analysis.ipynb
 ```
 
 Data files:
 - `data/candles/` — Historical hourly candles per coin
+- `data/funding/` — Historical hourly funding rates per coin
 - `data/reports/` — Backtest results, equity curves, parameter sweeps
 - `data/paper_trades/paper_trades.csv` — Completed paper trades
 - `data/paper_trades/hourly_snapshots.csv` — Hourly state snapshots
 - `data/paper_trades/state.json` — Persisted state for resume
+
+Configuration: `config.toml` (pairs, parameters, leverage, capital)
+
+Source code structure:
+- `src/hypemm/engine.py` — Core strategy engine (entry/exit logic)
+- `src/hypemm/backtest.py` — Historical backtest with funding integration
+- `src/hypemm/runner.py` — Live paper trading runner
+- `src/hypemm/funding.py` — Funding rate fetching and accrual
+- `src/hypemm/correlation.py` — 7-day rolling correlation gate
+- `src/hypemm/signals.py` — Z-score computation
+- `src/hypemm/price_buffer.py` — Hourly price buffer with live updates
+- `src/hypemm/dashboard.py` — Rich terminal UI
+- `src/hypemm/persistence.py` — State save/load for resume
+- `tests/` — 150+ unit tests covering all modules
 
 ## 8. Conclusion
 

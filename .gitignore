@@ -1,6 +1,5 @@
 __pycache__/
 *.pyc
-edge_log_*.csv
 .env
 *.egg-info/
 dist/
@@ -8,3 +7,8 @@ build/
 .venv/
 venv/
 data/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+uv.lock
+edge_log_*.csv
