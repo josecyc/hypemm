@@ -321,7 +321,40 @@ The gap between initial margin and liquidation threshold is your survival buffer
 
 **Balanced ($120K) is the recommendation** — enough buffer to survive the backtest's worst simultaneous unrealized loss (-$19,657) with 3.3x cushion, leaving room for unrealized swings beyond the historical worst-case.
 
-**5.3.6 Key liquidation risks specific to this strategy**
+**5.3.6 Worked example: $120K account at 5x during the worst moment**
+
+Walking through what would actually happen on Hyperliquid during the Sep 23, 2025 14:00 UTC drawdown:
+
+**Setup**
+- Deposit: $120,000
+- Leverage: 5x
+- Pairs: 4 open (LINK/SOL, DOGE/AVAX, SOL/AVAX, BTC/SOL)
+- Total notional: $400,000 (4 pairs × 2 legs × $50K)
+- Initial margin required: $80,000 (notional / leverage)
+- Free collateral buffer: $40,000 ($120K - $80K)
+- Maintenance margin: ~$40,000 (roughly half of initial, varies by coin)
+- **Liquidation happens when account equity falls below maintenance margin** (~$40K)
+
+**At the worst moment (-$19,657 simultaneous unrealized):**
+- Account equity = $120K + realized P&L + unrealized P&L = $120K + $0 - $19,657 = **$100,343**
+- Distance to liquidation = $100,343 - $40,000 = **$60,343 of headroom**
+- You've used ~33% of your total buffer ($19.7K of the $80K between starting capital and liquidation)
+
+**What would need to happen to liquidate you:**
+- Equity would need to drop to $40K
+- That requires combined losses of $80K
+- At $400K notional, that's a **20% adverse move across all positions simultaneously**
+- The backtest worst was only -$19.7K (about 25% of what would liquidate you)
+- You'd need roughly **4x the backtest's worst-case loss** to get liquidated
+
+**Recovery over the next hour:**
+- By 15:00 UTC, unrealized improved from -$19,657 to -$17,654 (+$2K)
+- By 16:00 UTC, two positions exited, unrealized was -$14,951 (+$4.7K from peak)
+- Within a few hours, the account was back above $105K equity
+
+The key takeaway: **the recommended $120K gives you room to survive a loss 4x worse than anything in the 7-month backtest** before liquidation becomes a concern.
+
+**5.3.7 Key liquidation risks specific to this strategy**
 
 1. **Correlation breakdown** (highest risk): All 4 positions can simultaneously go underwater if correlations collapse mid-trade (like BTC/SOL on Apr 1 — corr dropped 0.84 → 0.06 in one hour). The filter prevents NEW entries but doesn't close EXISTING positions.
 
@@ -331,7 +364,7 @@ The gap between initial margin and liquidation threshold is your survival buffer
 
 4. **Funding rate accumulation**: Positions held 48h on thin pairs (AVAX) can accumulate meaningful funding costs. Not modeled in backtest.
 
-**5.3.7 Stress test beyond backtest**
+**5.3.8 Stress test beyond backtest**
 
 The backtest covers 7 months. True tail events (100-year floods) could be 2-3x worse than historical maximum. At 5x leverage with $120K:
 - Backtest worst: $19.7K (we use 31% of margin buffer, survive comfortably)
