@@ -266,16 +266,26 @@ Liquidation occurs when equity falls below the sum of maintenance margin require
 | 1 pair | $100K | 2 legs | $20K | $4K |
 | 4 pairs | $400K | 8 legs | $80K | $16K |
 
-**5.3.3 Simultaneous drawdown from backtest**
+**5.3.3 Simultaneous unrealized loss from backtest**
 
-From the full backtest, tracking hour-by-hour concurrent MAE across all open positions:
+Computed hour-by-hour using actual prices to mark-to-market all open positions. This is the real measure of "how much is my account down from open positions at a given moment" — not a worst-case sum of lifetime MAEs.
 
 | Metric | Value |
 |--------|-------|
 | Max concurrent positions | 6 (rare — 3.3% of time) |
-| Max simultaneous unrealized loss | **-$22,976** (at $600K notional, Sep 22 2025) |
+| **Max simultaneous unrealized loss** | **-$19,657** (Sep 23 2025, 6 open positions, $600K notional) |
+| 5th percentile simultaneous unrealized | -$6,013 |
+| Median simultaneous unrealized | -$625 |
 | Paper trading max combined unrealized | -$1,001 (Apr 14, 2026) |
 | Worst single day P&L | -$18,343 (Sep 24 2025 — during correlation breakdown) |
+
+At the worst moment (Sep 23 2025 14:00 UTC), the 6 open positions were:
+- SOL/AVAX long ratio: -$7,352
+- DOGE/AVAX long ratio: -$7,342
+- BTC/SOL short ratio: -$2,384
+- ETH/BTC long ratio: -$1,105
+- LINK/SOL short ratio: -$1,106
+- ETH/SOL short ratio: -$368
 
 Concurrent position distribution:
 - 0 positions: 7% of time
@@ -288,15 +298,15 @@ Concurrent position distribution:
 | Leverage | Initial Margin | Max Loss Before Liquidation | Stress Test Pass? |
 |----------|---------------|----------------------------|-------------------|
 | 1x | $400,000 | $392,000 (before maint.) | ✅ Unlimited |
-| 2x | $200,000 | $184,000 | ✅ 8x worst-case |
-| 3x | $133,000 | $117,000 | ✅ 5x worst-case |
-| **5x** | **$80,000** | **$64,000** | **✅ 2.8x worst-case** |
-| 7x | $57,000 | $41,000 | ⚠️ 1.8x worst-case |
-| 10x | $40,000 | $24,000 | ❌ Just above worst-case |
+| 2x | $200,000 | $184,000 | ✅ 9x worst-case |
+| 3x | $133,000 | $117,000 | ✅ 6x worst-case |
+| **5x** | **$80,000** | **$64,000** | **✅ 3.3x worst-case** |
+| 7x | $57,000 | $41,000 | ✅ 2.1x worst-case |
+| 10x | $40,000 | $24,000 | ⚠️ 1.2x worst-case |
 | 15x | $27,000 | $11,000 | ❌ Below worst-case |
 | 20x | $20,000 | $4,000 | ❌ Would liquidate |
 
-Worst-case benchmark: -$22,976 (max concurrent simultaneous MAE from 7-month backtest).
+Worst-case benchmark: **-$19,657** (actual max simultaneous unrealized from 7-month backtest, mark-to-market across all 6 concurrent open positions).
 
 **5.3.5 Recommended account capitalization**
 
@@ -304,12 +314,12 @@ The gap between initial margin and liquidation threshold is your survival buffer
 
 | Goal | Leverage | Margin | Buffer | Total Capital | Rationale |
 |------|----------|--------|--------|---------------|-----------|
-| Conservative | 3x | $133K | $50K buffer | **$183K** | 5x buffer vs worst-case |
-| Balanced | 5x | $80K | $40K buffer | **$120K** | 2.8x buffer, matches paper trading plan |
-| Aggressive | 7x | $57K | $20K buffer | **$77K** | 1.8x buffer, higher liquidation risk |
-| Danger | 10x+ | <$40K | <$15K | **Not recommended** | Worst-case would liquidate |
+| Conservative | 3x | $133K | $50K buffer | **$183K** | 6x buffer vs worst-case |
+| Balanced | 5x | $80K | $40K buffer | **$120K** | 3.3x buffer, matches paper trading plan |
+| Aggressive | 7x | $57K | $20K buffer | **$77K** | 2.1x buffer, higher liquidation risk |
+| Danger | 10x+ | <$40K | <$15K | **Not recommended** | Little margin above worst-case |
 
-**Balanced ($120K) is the recommendation** — enough buffer to survive the backtest's worst concurrent drawdown with ~40% safety margin, plus room for unrealized swings beyond the historical worst-case.
+**Balanced ($120K) is the recommendation** — enough buffer to survive the backtest's worst simultaneous unrealized loss (-$19,657) with 3.3x cushion, leaving room for unrealized swings beyond the historical worst-case.
 
 **5.3.6 Key liquidation risks specific to this strategy**
 
@@ -324,11 +334,11 @@ The gap between initial margin and liquidation threshold is your survival buffer
 **5.3.7 Stress test beyond backtest**
 
 The backtest covers 7 months. True tail events (100-year floods) could be 2-3x worse than historical maximum. At 5x leverage with $120K:
-- Backtest worst: $23K (we lose 29% of margin buffer, survive)
-- 2x backtest worst: $46K (we lose 58% of buffer, still survive)
-- 3x backtest worst: $69K (we're 14% above liquidation threshold — close call)
+- Backtest worst: $19.7K (we use 31% of margin buffer, survive comfortably)
+- 2x backtest worst: $39K (we use 61% of buffer, survive)
+- 3x backtest worst: $59K (we use 92% of buffer — very close to liquidation)
 
-Recommendation: Monitor concurrent unrealized daily. If we hit 50% of the backtest worst-case ($11K combined unrealized), halve position sizes. If we hit 100% ($23K), exit all positions manually.
+Recommendation: Monitor concurrent unrealized daily. If we hit 50% of the backtest worst-case ($10K combined unrealized), halve position sizes. If we hit 100% ($20K), exit all positions manually.
 
 ### 5.4 What the correlation filter prevents
 
@@ -346,7 +356,7 @@ Without the filter, the September 2025 backtest lost $30,022 in one month. With 
 | 7x | $57K | $20K | **$77K** | ~$180K | 234% |
 | 10x | $40K | Below worst-case | Not recommended | — | — |
 
-"Capital Required" = initial margin + safety buffer. Safety buffer sized to survive the backtest's worst simultaneous unrealized loss (-$22,976) with 2-5x cushion depending on risk tolerance.
+"Capital Required" = initial margin + safety buffer. Safety buffer sized to survive the backtest's worst simultaneous unrealized loss (-$19,657) with 2-6x cushion depending on risk tolerance.
 
 **Recommended: $120K at 5x leverage** — optimal risk/reward balance.
 
@@ -361,14 +371,14 @@ Without the filter, the September 2025 backtest lost $30,022 in one month. With 
 
 ### 6.3 Liquidation risk at each leverage level
 
-Based on the $22,976 max simultaneous unrealized loss observed in the 7-month backtest:
+Based on the -$19,657 max simultaneous unrealized loss observed in the 7-month backtest (hour-by-hour mark-to-market of all concurrent open positions):
 
-| Leverage | Capital | Worst-case loss as % of buffer | Survive historical worst? | Survive 2x worst? | Survive 3x worst? |
-|----------|---------|------------------------------|--------------------------|-------------------|-------------------|
-| 3x | $183K | 46% | ✅ | ✅ | ✅ |
-| 5x | $120K | 58% | ✅ | ✅ | ⚠️ close |
-| 7x | $77K | 115% | ⚠️ close | ❌ | ❌ |
-| 10x | $40K | 570%+ | ❌ | ❌ | ❌ |
+| Leverage | Capital | Buffer | Worst-case uses | Survive historical worst? | Survive 2x worst? | Survive 3x worst? |
+|----------|---------|--------|-----------------|--------------------------|-------------------|-------------------|
+| 3x | $183K | $50K | 39% of buffer | ✅ | ✅ | ✅ |
+| 5x | $120K | $40K | 49% of buffer | ✅ | ✅ | ⚠️ close |
+| 7x | $77K | $20K | 98% of buffer | ⚠️ close | ❌ | ❌ |
+| 10x | $40K | $0 | N/A | ❌ | ❌ | ❌ |
 
 ### 6.3 Paper trading vs backtest comparison
 
