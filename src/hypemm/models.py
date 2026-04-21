@@ -3,7 +3,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from enum import IntEnum, StrEnum
+from enum import Enum, IntEnum
+
+try:
+    from enum import StrEnum
+except ImportError:
+    class StrEnum(str, Enum):
+        """Python 3.10-compatible fallback for enum.StrEnum."""
 
 
 class Direction(IntEnum):
@@ -52,6 +58,8 @@ class Signal:
     price_b: float
     timestamp_ms: int
     n_bars: int
+    hurst: float | None = None
+    adf_stat: float | None = None
 
 
 @dataclass

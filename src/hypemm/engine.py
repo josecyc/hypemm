@@ -71,9 +71,20 @@ class StrategyEngine:
             self.cooldowns[label] -= 1
             return None
 
-        # Correlation gate
-        if signal.correlation is None or signal.correlation < self.config.corr_threshold:
-            return None
+        # Correlation gate. Negative threshold disables the gate entirely.
+        if self.config.corr_threshold >= 0:
+            if signal.correlation is None or signal.correlation < self.config.corr_threshold:
+                return None
+
+        # Stationarity gate: Hurst exponent (halt when trending)
+        if self.config.hurst_threshold >= 0:
+            if signal.hurst is None or signal.hurst > self.config.hurst_threshold:
+                return None
+
+        # Stationarity gate: ADF test (halt when non-stationary)
+        if self.config.adf_threshold < 0:
+            if signal.adf_stat is None or signal.adf_stat > self.config.adf_threshold:
+                return None
 
         z = signal.z_score
         if z > self.config.entry_z:
@@ -100,6 +111,13 @@ class StrategyEngine:
             self.config.max_hold_hours,
         )
 
+        # Progress-exit: if z hasn't improved enough after N hours, cut
+        if reason is None and self.config.progress_exit_hours > 0:
+            if pos.hours_held >= self.config.progress_exit_hours:
+                required = abs(pos.entry_z) * (1.0 - self.config.progress_exit_pct)
+                if abs(z) > required:
+                    reason = ExitReason.TIME_STOP
+
         if reason is None:
             return None
 
@@ -113,9 +131,9 @@ class StrategyEngine:
         timestamp_ms: int,
     ) -> OpenPosition:
         """Confirm an entry fill. Registers the position internally."""
-        if order.signal.correlation is None:
+        if self.config.corr_threshold >= 0 and order.signal.correlation is None:
             raise ValueError("Entry confirmed with None correlation — should have been blocked")
-        corr = order.signal.correlation
+        corr = order.signal.correlation if order.signal.correlation is not None else float("nan")
         pos = OpenPosition(
             pair=order.pair,
             direction=order.direction,

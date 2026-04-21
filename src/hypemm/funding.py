@@ -5,7 +5,7 @@ from __future__ import annotations
 import csv
 import logging
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import httpx
@@ -17,8 +17,8 @@ from hypemm.models import DataFetchError, Direction, OpenPosition
 logger = logging.getLogger(__name__)
 
 FUNDING_FIELDS = ["timestamp", "funding_rate", "premium"]
-MAX_LOOKBACK_DAYS = 540
 PAGE_SIZE = 500  # Hyperliquid's hard cap per fundingHistory response
+BINANCE_FUNDING_LIMIT = 1000
 
 
 def fetch_funding_page(
@@ -113,7 +113,7 @@ def fetch_coin_funding(
         start_ms = existing_max + 1
         existing_rows = _read_existing(path)
     else:
-        start_ms = now_ms - MAX_LOOKBACK_DAYS * 24 * 3600 * 1000
+        start_ms = now_ms - 540 * 24 * 3600 * 1000
         existing_rows = []
 
     all_rows: list[dict[str, float | int]] = list(existing_rows)
@@ -149,6 +149,85 @@ def fetch_coin_funding(
     logger.info("%s funding: %d unique records saved", coin, n_unique)
 
 
+def _binance_symbol(coin: str) -> str:
+    return f"{coin}USDT"
+
+
+def fetch_binance_coin_funding(
+    client: httpx.Client,
+    base_url: str,
+    coin: str,
+    funding_dir: Path,
+    lookback_days: int,
+    rate_limit_sec: float,
+    force: bool = False,
+) -> None:
+    """Fetch Binance funding history and expand to hourly rows with zeros between events."""
+    path = funding_dir / f"{coin}_1h.csv"
+    now = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
+    end_dt = now - timedelta(hours=1)
+    start_dt = now - timedelta(days=lookback_days)
+    start_ms = int(start_dt.timestamp() * 1000)
+    end_ms = int(end_dt.timestamp() * 1000)
+
+    if not force:
+        existing = _existing_max_ts(path)
+        if existing and end_ms - existing < 3_600_000:
+            logger.info("%s funding: already up-to-date, skipping", coin)
+            return
+
+    symbol = _binance_symbol(coin)
+    cursor_ms = start_ms
+    event_rates: dict[int, float] = {}
+
+    while cursor_ms <= end_ms:
+        params = {
+            "symbol": symbol,
+            "startTime": cursor_ms,
+            "endTime": end_ms,
+            "limit": BINANCE_FUNDING_LIMIT,
+        }
+        r = client.get(f"{base_url}/fapi/v1/fundingRate", params=params, timeout=20.0)
+        r.raise_for_status()
+        data = r.json()
+        if not isinstance(data, list) or not data:
+            break
+
+        for row in data:
+            event_rates[int(row["fundingTime"])] = float(row["fundingRate"])
+
+        last_ts = int(data[-1]["fundingTime"])
+        logger.info(
+            "%s funding (binance): %s -> %s (%d records)",
+            coin,
+            datetime.fromtimestamp(int(data[0]["fundingTime"]) / 1000, tz=timezone.utc).strftime(
+                "%Y-%m-%d %H:%M"
+            ),
+            datetime.fromtimestamp(last_ts / 1000, tz=timezone.utc).strftime("%Y-%m-%d %H:%M"),
+            len(data),
+        )
+        if len(data) < BINANCE_FUNDING_LIMIT:
+            break
+        cursor_ms = last_ts + 1
+        time.sleep(rate_limit_sec)
+
+    rows: list[dict[str, float | int]] = []
+    hour = start_dt
+    while hour <= end_dt:
+        ts = int(hour.timestamp() * 1000)
+        rows.append(
+            {
+                "timestamp": ts,
+                "funding_rate": event_rates.get(ts, 0.0),
+                "premium": 0.0,
+            }
+        )
+        hour += timedelta(hours=1)
+
+    n_unique = _save_csv(path, rows)
+    logger.info("%s funding (binance): %d hourly rows saved", coin, n_unique)
+
+
 def _read_existing(path: Path) -> list[dict[str, float | int]]:
     """Read an existing funding CSV into a list of rows."""
     rows: list[dict[str, float | int]] = []
@@ -176,14 +255,25 @@ def fetch_all_funding(
 
     with httpx.Client() as client:
         for coin in coins:
-            fetch_coin_funding(
-                client,
-                infra.rest_url,
-                coin,
-                infra.funding_dir,
-                infra.rate_limit_sec,
-                force,
-            )
+            if infra.market_data_provider == "binance_futures":
+                fetch_binance_coin_funding(
+                    client,
+                    infra.binance_futures_url,
+                    coin,
+                    infra.funding_dir,
+                    infra.lookback_days,
+                    infra.rate_limit_sec,
+                    force,
+                )
+            else:
+                fetch_coin_funding(
+                    client,
+                    infra.rest_url,
+                    coin,
+                    infra.funding_dir,
+                    infra.rate_limit_sec,
+                    force,
+                )
 
     logger.info("Funding fetch complete")
 

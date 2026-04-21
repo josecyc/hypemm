@@ -1,0 +1,48 @@
+[strategy]
+lookback_hours = 48
+entry_z = 2.0
+exit_z = 0.5
+max_hold_hours = 48
+stop_loss_z = 4.0
+notional_per_leg = 50_000
+cost_per_side_bps = 2.0
+cooldown_hours = 2
+corr_window_hours = 168
+corr_threshold = 0.7
+
+[[strategy.pairs]]
+coin_a = "LINK"
+coin_b = "SOL"
+
+[[strategy.pairs]]
+coin_a = "DOGE"
+coin_b = "AVAX"
+
+[[strategy.pairs]]
+coin_a = "SOL"
+coin_b = "AVAX"
+
+[[strategy.pairs]]
+coin_a = "BTC"
+coin_b = "SOL"
+
+[infra]
+market_data_provider = "binance_futures"
+binance_futures_url = "https://fapi.binance.com"
+lookback_days = 2190
+rate_limit_sec = 0.2
+poll_interval_sec = 60
+data_dir = "data/binance_6y"
+
+[gates]
+min_sharpe = 1.0
+min_high_corr_pct = 65
+max_breakdown_hours = 336
+min_easy_pairs = 3
+depth_bps_levels = [2, 5, 10, 25, 50]
+ob_snapshot_interval_sec = 300
+ob_collection_duration_sec = 7200
+
+[sweep]
+lookbacks = [24, 48, 72]
+entry_zs = [1.5, 2.0, 2.5]

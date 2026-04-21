@@ -16,7 +16,9 @@ from hypemm.math import (
     compute_leg_pnl,
     compute_log_ratios,
     compute_z_scores,
+    rolling_adf,
     rolling_correlation,
+    rolling_hurst,
 )
 from hypemm.models import (
     BacktestResult,
@@ -57,6 +59,16 @@ def run_backtest(
     z_scores = compute_z_scores(log_ratios, config.lookback_hours)
     corr_values = _compute_rolling_corr(pa, pb, config.corr_window_hours)
 
+    # Stationarity metrics (computed only when gates are enabled)
+    hurst_values = None
+    adf_values = None
+    if config.hurst_threshold >= 0:
+        hurst_values = rolling_hurst(
+            log_ratios, config.hurst_window_hours
+        )
+    if config.adf_threshold < 0:
+        adf_values = rolling_adf(log_ratios, config.hurst_window_hours)
+
     funding_a = funding[pair.coin_a] if funding is not None else None
     funding_b = funding[pair.coin_b] if funding is not None else None
 
@@ -69,6 +81,16 @@ def run_backtest(
             continue
 
         corr = corr_values[i] if not np.isnan(corr_values[i]) else None
+        h_val = (
+            float(hurst_values[i])
+            if hurst_values is not None and not np.isnan(hurst_values[i])
+            else None
+        )
+        adf_val = (
+            float(adf_values[i])
+            if adf_values is not None and not np.isnan(adf_values[i])
+            else None
+        )
         ts_ms = int(timestamps[i].timestamp() * 1000)
 
         signal = Signal(
@@ -79,6 +101,8 @@ def run_backtest(
             price_b=float(pb[i]),
             timestamp_ms=ts_ms,
             n_bars=i + 1,
+            hurst=h_val,
+            adf_stat=adf_val,
         )
 
         orders = engine.process_bar({pair.label: signal}, ts_ms)

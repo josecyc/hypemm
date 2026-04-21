@@ -27,6 +27,14 @@ uv run hypemm run
 
 # Paper trade ignoring saved state
 uv run hypemm run --fresh
+
+# Start the isolated original_3+ADA paper instance
+./scripts/paper_original_3_ada.sh start
+
+# Check / tail / stop that isolated instance
+./scripts/paper_original_3_ada.sh status
+./scripts/paper_original_3_ada.sh tail
+./scripts/paper_original_3_ada.sh stop
 ```
 
 ## Strategy

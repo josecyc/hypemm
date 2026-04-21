@@ -5,7 +5,7 @@ from __future__ import annotations
 import csv
 import logging
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -22,8 +22,8 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 CANDLE_FIELDS = ["timestamp", "open", "high", "low", "close", "volume"]
-MAX_LOOKBACK_DAYS = 540
 CHUNK_DAYS = 30
+BINANCE_KLINES_LIMIT = 1500
 
 
 def fetch_candles_chunk(
@@ -114,7 +114,7 @@ def fetch_coin_candles(
             logger.info("%s: already up-to-date, skipping", coin)
             return
 
-    start_ms = now_ms - MAX_LOOKBACK_DAYS * 24 * 3600 * 1000
+    start_ms = now_ms - 540 * 24 * 3600 * 1000
     chunk_ms = CHUNK_DAYS * 24 * 3600 * 1000
 
     all_rows: list[dict[str, float | int]] = []
@@ -147,6 +147,83 @@ def fetch_coin_candles(
     logger.info("%s: %d unique candles saved", coin, n_unique)
 
 
+def _binance_symbol(coin: str) -> str:
+    return f"{coin}USDT"
+
+
+def fetch_binance_coin_candles(
+    client: httpx.Client,
+    base_url: str,
+    coin: str,
+    candles_dir: Path,
+    lookback_days: int,
+    rate_limit_sec: float,
+    force: bool = False,
+) -> None:
+    """Fetch hourly candles from Binance USD-M futures."""
+    path = candles_dir / f"{coin}_1h.csv"
+    now = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
+    now_ms = int(now.timestamp() * 1000)
+
+    if not force:
+        existing = _existing_max_ts(path)
+        if existing and now_ms - existing < 3_600_000:
+            logger.info("%s: already up-to-date, skipping", coin)
+            return
+
+    start_dt = now - timedelta(days=lookback_days)
+    cursor_ms = int(start_dt.timestamp() * 1000)
+    symbol = _binance_symbol(coin)
+    all_rows: list[dict[str, float | int]] = []
+
+    while cursor_ms < now_ms:
+        params = {
+            "symbol": symbol,
+            "interval": "1h",
+            "startTime": cursor_ms,
+            "limit": BINANCE_KLINES_LIMIT,
+        }
+        r = client.get(f"{base_url}/fapi/v1/klines", params=params, timeout=20.0)
+        r.raise_for_status()
+        data = r.json()
+        if not isinstance(data, list) or not data:
+            break
+
+        rows: list[dict[str, float | int]] = []
+        for c in data:
+            rows.append(
+                {
+                    "timestamp": int(c[0]),
+                    "open": float(c[1]),
+                    "high": float(c[2]),
+                    "low": float(c[3]),
+                    "close": float(c[4]),
+                    "volume": float(c[5]),
+                }
+            )
+        all_rows.extend(rows)
+        first_dt = datetime.fromtimestamp(int(rows[0]["timestamp"]) / 1000, tz=timezone.utc)
+        last_dt = datetime.fromtimestamp(int(rows[-1]["timestamp"]) / 1000, tz=timezone.utc)
+        logger.info(
+            "%s (binance): %s -> %s (%d candles)",
+            coin,
+            first_dt.strftime("%Y-%m-%d"),
+            last_dt.strftime("%Y-%m-%d"),
+            len(rows),
+        )
+        if len(rows) < BINANCE_KLINES_LIMIT:
+            break
+        cursor_ms = int(rows[-1]["timestamp"]) + 3_600_000
+        time.sleep(rate_limit_sec)
+
+    if not all_rows:
+        logger.warning("%s: no Binance candle data returned", coin)
+        return
+
+    n_unique = _save_csv(path, all_rows)
+    logger.info("%s (binance): %d unique candles saved", coin, n_unique)
+
+
 def fetch_all_candles(
     coins: list[str],
     infra: InfraConfig,
@@ -158,14 +235,25 @@ def fetch_all_candles(
 
     with httpx.Client() as client:
         for coin in coins:
-            fetch_coin_candles(
-                client,
-                infra.rest_url,
-                coin,
-                infra.candles_dir,
-                infra.rate_limit_sec,
-                force,
-            )
+            if infra.market_data_provider == "binance_futures":
+                fetch_binance_coin_candles(
+                    client,
+                    infra.binance_futures_url,
+                    coin,
+                    infra.candles_dir,
+                    infra.lookback_days,
+                    infra.rate_limit_sec,
+                    force,
+                )
+            else:
+                fetch_coin_candles(
+                    client,
+                    infra.rest_url,
+                    coin,
+                    infra.candles_dir,
+                    infra.rate_limit_sec,
+                    force,
+                )
 
     logger.info("Data fetch complete")
 

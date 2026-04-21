@@ -1,13 +1,6 @@
-# Default config — points to the optimized strategy
-# See configs/ for all variants:
-#   configs/original.toml         — original 4-pair strategy
-#   configs/optimized.toml        — walk-forward optimized (recommended)
-#   configs/optimized_hurst.toml  — optimized + Hurst gate (lower DD)
-#   configs/backtest/             — Binance data configs for research
-#
-# Usage:
-#   hypemm run                              # uses this file
-#   hypemm run --config configs/original.toml  # run a specific config
+# Optimized strategy — walk-forward validated on 6 years OOS
+# 4 pairs (drop BTC/SOL, add DOGE/ADA), entry 2.5, max hold 36h, progress-exit
+# OOS: SR 2.11, $284K net, $42K max DD, DSR 77%, profitable in bear markets
 
 [strategy]
 lookback_hours = 48

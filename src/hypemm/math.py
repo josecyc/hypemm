@@ -130,6 +130,124 @@ def compute_leg_pnl(
     return pnl_a, pnl_b
 
 
+# -- Stationarity --
+
+
+def hurst_exponent(series: np.ndarray, max_lag: int = 20) -> float:
+    """Estimate the Hurst exponent via variance of lagged differences.
+
+    For each lag τ, compute std(X_{t+τ} - X_t).  For fractional Brownian
+    motion this scales as τ^H, so H = slope of log(std) vs log(τ).
+
+    H < 0.5 → mean-reverting, H = 0.5 → random walk, H > 0.5 → trending.
+    Returns NaN if insufficient data.
+    """
+    n = len(series)
+    if n < max_lag * 2:
+        return float("nan")
+
+    lags = range(2, min(max_lag + 1, n // 2))
+    log_lags = []
+    log_stds = []
+
+    for lag in lags:
+        diffs = series[lag:] - series[:-lag]
+        std = float(np.std(diffs))
+        if std > 1e-15:
+            log_lags.append(np.log(lag))
+            log_stds.append(np.log(std))
+
+    if len(log_lags) < 3:
+        return float("nan")
+
+    # Linear regression: log(std) = H * log(lag) + c
+    x = np.array(log_lags)
+    y = np.array(log_stds)
+    n_pts = len(x)
+    sx = np.sum(x)
+    sy = np.sum(y)
+    sxx = np.sum(x * x)
+    sxy = np.sum(x * y)
+    denom = n_pts * sxx - sx * sx
+    if abs(denom) < 1e-20:
+        return float("nan")
+
+    h = (n_pts * sxy - sx * sy) / denom
+    return float(np.clip(h, 0.0, 1.0))
+
+
+def rolling_hurst(
+    log_ratios: np.ndarray, window: int, max_lag: int = 20
+) -> np.ndarray:
+    """Compute rolling Hurst exponent on log price ratios."""
+    n = len(log_ratios)
+    result = np.full(n, np.nan)
+    for i in range(window, n):
+        result[i] = hurst_exponent(log_ratios[i - window : i], max_lag=max_lag)
+    return result
+
+
+def adf_test(series: np.ndarray, max_lag: int = 1) -> float:
+    """Augmented Dickey-Fuller test statistic (no p-value table needed).
+
+    Tests H0: unit root (non-stationary) vs H1: stationary.
+    Returns the t-statistic. Critical values (approx, no trend, n>250):
+      1%: -3.43, 5%: -2.86, 10%: -2.57
+    More negative = stronger evidence of stationarity.
+    """
+    n = len(series)
+    if n < max_lag + 10:
+        return 0.0
+
+    # Δy_t = α * y_{t-1} + Σ β_i * Δy_{t-i} + ε_t
+    dy = np.diff(series)
+    y_lag = series[max_lag:-1]
+    m = len(y_lag)
+
+    # Build design matrix: [y_{t-1}, Δy_{t-1}, ..., Δy_{t-max_lag}]
+    x_cols = [y_lag]
+    for lag in range(1, max_lag + 1):
+        x_cols.append(dy[max_lag - lag : m + max_lag - lag])
+
+    x = np.column_stack(x_cols)
+    y_dep = dy[max_lag : m + max_lag]
+
+    if len(y_dep) != x.shape[0]:
+        min_len = min(len(y_dep), x.shape[0])
+        y_dep = y_dep[:min_len]
+        x = x[:min_len]
+
+    # OLS: β = (X'X)^{-1} X'y
+    xtx = x.T @ x
+    try:
+        xtx_inv = np.linalg.inv(xtx)
+    except np.linalg.LinAlgError:
+        return 0.0
+
+    beta = xtx_inv @ (x.T @ y_dep)
+    residuals = y_dep - x @ beta
+    s2 = float(np.sum(residuals**2) / (len(y_dep) - x.shape[1]))
+    if s2 < 1e-20:
+        return -10.0  # perfectly stationary
+
+    se = np.sqrt(np.diag(xtx_inv) * s2)
+    if se[0] < 1e-15:
+        return -10.0
+
+    return float(beta[0] / se[0])
+
+
+def rolling_adf(
+    log_ratios: np.ndarray, window: int, max_lag: int = 1
+) -> np.ndarray:
+    """Compute rolling ADF t-statistic on log price ratios."""
+    n = len(log_ratios)
+    result = np.full(n, np.nan)
+    for i in range(window, n):
+        result[i] = adf_test(log_ratios[i - window : i], max_lag=max_lag)
+    return result
+
+
 def compute_unrealized_pnl(
     position: OpenPosition,
     current_price_a: float,

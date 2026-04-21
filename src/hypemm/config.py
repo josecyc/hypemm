@@ -2,11 +2,18 @@
 
 from __future__ import annotations
 
-import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from hypemm.models import PairConfig
+
+try:
+    import tomllib  # type: ignore[attr-defined]
+except ModuleNotFoundError:
+    try:
+        import tomli as tomllib  # type: ignore[no-redef]
+    except ModuleNotFoundError:
+        import toml as tomllib  # type: ignore[no-redef]
 
 
 @dataclass(frozen=True)
@@ -24,6 +31,13 @@ class StrategyConfig:
     cooldown_hours: int = 2
     corr_window_hours: int = 168
     corr_threshold: float = 0.7
+    # Stationarity gate: halt pair when Hurst > threshold or ADF > threshold
+    hurst_window_hours: int = 168
+    hurst_threshold: float = -1.0  # negative = disabled; 0.5 = halt when trending
+    adf_threshold: float = 0.0  # 0 = disabled; -2.86 = halt when ADF > -2.86 (5% level)
+    # Progress-exit: exit early if z hasn't improved after N hours
+    progress_exit_hours: int = 0  # 0 = disabled
+    progress_exit_pct: float = 0.10  # require 10% improvement in |z|
 
     @property
     def round_trip_cost(self) -> float:
@@ -45,6 +59,9 @@ class InfraConfig:
     """Infrastructure / deployment configuration."""
 
     rest_url: str = "https://api.hyperliquid.xyz/info"
+    market_data_provider: str = "hyperliquid"
+    lookback_days: int = 540
+    binance_futures_url: str = "https://fapi.binance.com"
     rate_limit_sec: float = 0.7
     poll_interval_sec: int = 60
     data_dir: Path = field(default_factory=lambda: Path("data"))
