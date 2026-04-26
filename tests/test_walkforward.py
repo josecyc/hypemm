@@ -10,18 +10,17 @@ import pytest
 from hypemm.models import CompletedTrade, Direction, ExitReason
 from hypemm.walkforward import (
     _daily_pnl_series,
-    _select_training_config,
-    _training_score,
+    _inv_norm_cdf,
     _kurtosis,
     _norm_cdf,
-    _inv_norm_cdf,
+    _select_training_config,
     _skewness,
+    _training_score,
     conditional_var,
     deflated_sharpe_ratio,
     probabilistic_sharpe_ratio,
     sortino_ratio,
 )
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -445,9 +444,9 @@ class TestTrainingSelection:
     def test_select_training_config_by_net(self, monkeypatch: pytest.MonkeyPatch) -> None:
         import pandas as pd
 
+        import hypemm.walkforward as walkforward
         from hypemm.config import StrategyConfig
         from hypemm.models import PairConfig
-        import hypemm.walkforward as walkforward
 
         prices = pd.DataFrame({"A": [1.0] * 200, "B": [1.0] * 200})
         pair = PairConfig("A", "B")

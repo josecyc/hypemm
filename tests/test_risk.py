@@ -18,7 +18,6 @@ from hypemm.models import (
 )
 from hypemm.risk import RiskStatus, compute_risk_report
 
-
 PAIR = PairConfig("LINK", "SOL")
 NOTIONAL = 50_000.0
 NOW_MS = 1_700_000_000_000  # arbitrary fixed reference timestamp

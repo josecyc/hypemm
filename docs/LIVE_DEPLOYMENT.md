@@ -37,7 +37,25 @@ export HYPERLIQUID_API_URL="https://api.hyperliquid.xyz"  # use testnet first
 Place them in `~/.hypemm.env` and source it from the tmux session, not in
 `.zshrc` (avoids leaking into other shells).
 
-## 4. Risk thresholds
+## 4. Live execution config
+
+Knobs live in `configs/optimized.toml` under `[infra]` (defaults shown):
+
+```toml
+leverage = 5                # 5x cross-margin per coin
+is_cross_margin = true
+max_slippage_bps = 5.0      # abort fill if VWAP > N bps from mid
+ioc_aggression_bps = 10.0   # IoC limit price = mid +/- this many bps
+fill_poll_seconds = 0.5
+fill_timeout_seconds = 30.0
+```
+
+Tighten `max_slippage_bps` to be conservative; loosen if your $50K legs
+sweep too much depth on illiquid coins (AVAX in particular). 5 bps is a
+defensible default for the THESIS pairs given the orderbook depth in
+section 3.6.
+
+## 5. Risk thresholds
 
 Defined in `configs/optimized.toml` under `[risk]`. Calibrated against THESIS
 section 5.3.8 (worst backtest concurrent unrealized −$19,657).
@@ -107,13 +125,61 @@ tmux send-keys -t hype_mm_live C-c
 The runner saves state on Ctrl+C, so it can be resumed without losing
 position context.
 
-## 9. Known limitations
+## 9. Testnet smoke test (do this before mainnet)
 
-- `LiveExecutionAdapter.get_fill_prices` is currently a scaffold. Order
-  signing (EIP-712), placement, and fill polling need to be implemented before
-  running with `--live`. Until then, paper trading is the only path.
+The live adapter supports both networks via `HYPERLIQUID_API_URL`. Mainnet
+sigs use `source: "a"`, testnet uses `source: "b"`; the adapter switches
+automatically based on the URL.
+
+### Setup
+
+```bash
+# Get testnet USDC: https://app.hyperliquid-testnet.xyz/drip
+export HYPERLIQUID_API_URL="https://api.hyperliquid-testnet.xyz"
+export HYPERLIQUID_PRIVATE_KEY="0x..."   # testnet API wallet
+export HYPERLIQUID_ACCOUNT="0x..."       # testnet account
+```
+
+### Run
+
+```bash
+cd ~/hypemm
+uv run hypemm run \
+  --config configs/paper_optimized.toml \
+  --live --confirm-live \
+  --log-file data/paper_optimized/runner.log
+```
+
+### What to verify (24-48h)
+
+| Check | How |
+|---|---|
+| Asset meta loads | First log line: `Fetched HL meta: N assets` |
+| Leverage set per coin | `Set LINK leverage to 5x (cross)` for each pair leg |
+| Orders place | First entry: 2 lines from `_post_signed`, no errors |
+| Fills arrive | `_await_fill` returns within `fill_timeout_seconds` |
+| Slippage stays in budget | No `ExecutionError: ... slippage > 5 bps cap` |
+| Reconciliation passes restart | Kill the runner mid-position, restart, no divergence |
+| Risk monitor renders | Risk panel shows OK across the board |
+
+If any step fails on testnet, fix it before going to mainnet. Mainnet starts
+at $25K/leg per phase 1 — testnet bugs cost $0, mainnet bugs cost real money.
+
+## 10. Known limitations
+
+- `LiveExecutionAdapter` uses **IoC limit orders** with a configurable
+  aggression band (default 10 bps from mid). Realized fill must be within
+  `max_slippage_bps` (default 5 bps) of mid or `ExecutionError` aborts.
+  No retry-as-market fallback yet.
+- The runner places legs **sequentially** (not as an HL "grouping": "normalTpsl"
+  bundle). If leg A fills and leg B fails, you're temporarily unhedged. The
+  reconciliation gate catches this on next startup; the kill switches catch it
+  intra-run via `concurrent_unrealized`. A future improvement is to bundle.
 - Funding accrual uses Hyperliquid's `fundingHistory` endpoint (hourly). On
   the actual exchange, funding is paid every hour at :00 UTC.
 - The 36h max-hold and progress-exit fire on hourly boundaries only. A flash
   move can push z past stop-loss intra-hour and back without exiting. THESIS
   section 2.2 documents this trade-off.
+- Reconciliation tolerance is 5% by default; smaller mismatches go silent.
+  Adjust by editing `reconcile()` call in `runner.py` if you need stricter
+  parity (e.g. testnet smoke).

@@ -436,8 +436,23 @@ def cmd_run(args: argparse.Namespace) -> None:
             "See docs/LIVE_DEPLOYMENT.md."
         )
 
-    adapter = build_adapter(app.infra.rest_url, live=args.live)
-    run_paper_loop(app, fresh=args.fresh, adapter=adapter, live_mode=args.live)
+    adapter = build_adapter(
+        app.infra.rest_url,
+        live=args.live,
+        leverage=app.infra.leverage,
+        is_cross_margin=app.infra.is_cross_margin,
+        max_slippage_bps=app.infra.max_slippage_bps,
+        ioc_aggression_bps=app.infra.ioc_aggression_bps,
+        fill_poll_seconds=app.infra.fill_poll_seconds,
+        fill_timeout_seconds=app.infra.fill_timeout_seconds,
+    )
+    run_paper_loop(
+        app,
+        fresh=args.fresh,
+        adapter=adapter,
+        live_mode=args.live,
+        force_reconcile=args.force_reconcile,
+    )
 
 
 def main() -> None:
@@ -493,6 +508,15 @@ def main() -> None:
         help=(
             "Route logs to this file instead of stderr — keeps the Rich "
             "dashboard frame clean inside a tmux pane"
+        ),
+    )
+    run_p.add_argument(
+        "--force-reconcile",
+        action="store_true",
+        help=(
+            "Live only: proceed even if engine state diverges from exchange "
+            "positions. Engine state will be trusted; mismatched on-exchange "
+            "positions will be ignored until they exit naturally"
         ),
     )
     run_p.set_defaults(func=cmd_run)

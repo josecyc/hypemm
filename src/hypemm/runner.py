@@ -40,6 +40,7 @@ def run_paper_loop(
     fresh: bool = False,
     adapter: ExecutionAdapter | None = None,
     live_mode: bool = False,
+    force_reconcile: bool = False,
 ) -> None:
     """Run the paper trading monitor loop.
 
@@ -69,6 +70,37 @@ def run_paper_loop(
     seed_price_buffer(buffer, config, infra)
 
     mode_label = "LIVE" if live_mode else "paper"
+
+    # Pre-flight: in live mode, reconcile engine state vs the exchange so we
+    # don't blindly trust state.json after a crash or manual intervention.
+    if live_mode:
+        from hypemm.reconcile import reconcile
+
+        if not hasattr(adapter, "fetch_user_state"):
+            raise RuntimeError(
+                "live mode requires an adapter with fetch_user_state; "
+                "use LiveExecutionAdapter"
+            )
+        user_state = adapter.fetch_user_state()
+        divergences = reconcile(engine, user_state, config.notional_per_leg)
+        if divergences:
+            for d in divergences:
+                logger.error(
+                    "RECONCILE divergence: %s expected %s %.6f, exchange has %.6f",
+                    d.coin, d.expected_direction, d.expected_size, d.actual_size,
+                )
+            if not force_reconcile:
+                raise RuntimeError(
+                    f"reconciliation found {len(divergences)} divergence(s) between "
+                    "engine state and exchange. Re-run with --force-reconcile to "
+                    "ignore (engine state will be trusted), or close exchange "
+                    "positions manually and restart with --fresh."
+                )
+            logger.warning(
+                "RECONCILE proceeding despite %d divergence(s) — engine state takes precedence",
+                len(divergences),
+            )
+
     logging.info("Starting %s trade monitor (Ctrl+C to stop)", mode_label)
 
     # Render the Live UI when we're in any terminal context — including a
