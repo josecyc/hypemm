@@ -7,6 +7,7 @@ import sys
 import time
 from dataclasses import replace
 from datetime import datetime, timezone
+from pathlib import Path
 
 from rich.console import Console
 from rich.live import Live
@@ -15,7 +16,7 @@ from hypemm.config import AppConfig
 from hypemm.dashboard import build_dashboard
 from hypemm.data import seed_price_buffer
 from hypemm.engine import StrategyEngine
-from hypemm.execution import PaperExecutionAdapter
+from hypemm.execution import ExecutionAdapter, PaperExecutionAdapter
 from hypemm.funding import accrue_hourly_funding, fetch_latest_funding_rates
 from hypemm.models import (
     CompletedTrade,
@@ -26,19 +27,32 @@ from hypemm.models import (
 )
 from hypemm.persistence import load_state, load_trades, log_hourly_snapshot, log_trade, save_state
 from hypemm.price_buffer import HourlyPriceBuffer
+from hypemm.risk import RiskReport, RiskStatus, compute_risk_report
 from hypemm.signals import compute_pair_signal
 
 console = Console()
 logger = logging.getLogger(__name__)
 
 
-def run_paper_loop(app: AppConfig, fresh: bool = False) -> None:
-    """Run the paper trading monitor loop."""
+def run_paper_loop(
+    app: AppConfig,
+    fresh: bool = False,
+    adapter: ExecutionAdapter | None = None,
+    live_mode: bool = False,
+) -> None:
+    """Run the paper trading monitor loop.
+
+    By default, paper-trades against the Hyperliquid mid-price. Pass an explicit
+    adapter (e.g. LiveExecutionAdapter) to switch execution mode. live_mode only
+    affects dashboard styling — the live adapter is what actually places orders.
+    """
     config = app.strategy
     infra = app.infra
 
     engine = StrategyEngine(config)
-    adapter = PaperExecutionAdapter(infra.rest_url)
+    owns_adapter = adapter is None
+    if adapter is None:
+        adapter = PaperExecutionAdapter(infra.rest_url)
     state_path = infra.paper_trades_dir / "state.json"
     trades_path = infra.paper_trades_dir / "paper_trades.csv"
     snapshot_path = infra.paper_trades_dir / "hourly_snapshots.csv"
@@ -53,7 +67,8 @@ def run_paper_loop(app: AppConfig, fresh: bool = False) -> None:
     buffer = HourlyPriceBuffer(config.all_coins)
     seed_price_buffer(buffer, config, infra)
 
-    logging.info("Starting paper trade monitor (Ctrl+C to stop)")
+    mode_label = "LIVE" if live_mode else "paper"
+    logging.info("Starting %s trade monitor (Ctrl+C to stop)", mode_label)
 
     try:
         if sys.stdout.isatty():
@@ -61,8 +76,7 @@ def run_paper_loop(app: AppConfig, fresh: bool = False) -> None:
                 _run_loop(
                     engine=engine,
                     adapter=adapter,
-                    config=config,
-                    infra=infra,
+                    app=app,
                     buffer=buffer,
                     completed_trades=completed_trades,
                     state_path=state_path,
@@ -70,14 +84,14 @@ def run_paper_loop(app: AppConfig, fresh: bool = False) -> None:
                     snapshot_path=snapshot_path,
                     start_time=start_time,
                     live=live,
+                    live_mode=live_mode,
                 )
         else:
-            logging.info("No interactive TTY detected, running headless paper loop")
+            logging.info("No interactive TTY detected, running headless %s loop", mode_label)
             _run_loop(
                 engine=engine,
                 adapter=adapter,
-                config=config,
-                infra=infra,
+                app=app,
                 buffer=buffer,
                 completed_trades=completed_trades,
                 state_path=state_path,
@@ -85,29 +99,36 @@ def run_paper_loop(app: AppConfig, fresh: bool = False) -> None:
                 snapshot_path=snapshot_path,
                 start_time=start_time,
                 live=None,
+                live_mode=live_mode,
             )
 
     except KeyboardInterrupt:
         save_state(engine, state_path, start_time)
-        logging.info("Paper trading stopped. State saved.")
+        logging.info("%s trading stopped. State saved.", mode_label)
     finally:
-        adapter.close()
+        if owns_adapter:
+            adapter.close()
 
 
 def _run_loop(
     *,
     engine: StrategyEngine,
-    adapter: PaperExecutionAdapter,
-    config,
-    infra,
+    adapter: ExecutionAdapter,
+    app: AppConfig,
     buffer: HourlyPriceBuffer,
     completed_trades: list[CompletedTrade],
-    state_path,
-    trades_path,
-    snapshot_path,
+    state_path: Path,
+    trades_path: Path,
+    snapshot_path: Path,
     start_time: str,
     live: Live | None,
+    live_mode: bool,
 ) -> None:
+    config = app.strategy
+    infra = app.infra
+    risk_cfg = app.risk
+    last_risk_status: RiskStatus = RiskStatus.OK
+
     while True:
         prices: dict[str, float] = {}
         for coin in config.all_coins:
@@ -130,6 +151,20 @@ def _run_loop(
             sig = compute_pair_signal(pa, pb, config, pair, now_ms)
             if sig:
                 signals[pair.label] = sig
+
+        risk_report = compute_risk_report(
+            engine,
+            signals,
+            completed_trades,
+            risk_cfg,
+            config.notional_per_leg,
+            now_ms=now_ms,
+        )
+        engine.halt_entries = risk_report.halts_entry
+
+        if risk_report.worst_status != last_risk_status:
+            _log_risk_change(last_risk_status, risk_report)
+            last_risk_status = risk_report.worst_status
 
         if hour_changed:
             _accrue_funding(engine, adapter, config.all_coins, config.notional_per_leg)
@@ -161,13 +196,33 @@ def _run_loop(
             save_state(engine, state_path, start_time)
 
         if live is not None:
-            live.update(build_dashboard(engine, signals, completed_trades, config, start_time))
+            live.update(
+                build_dashboard(
+                    engine,
+                    signals,
+                    completed_trades,
+                    config,
+                    start_time,
+                    risk_report=risk_report,
+                    live_mode=live_mode,
+                )
+            )
         time.sleep(infra.poll_interval_sec)
+
+
+def _log_risk_change(prev: RiskStatus, report: RiskReport) -> None:
+    """Emit a log line when the worst risk status changes."""
+    triggers = [s for s in report.signals if s.status != RiskStatus.OK]
+    if triggers:
+        details = "; ".join(f"{s.name}={s.detail}" for s in triggers)
+    else:
+        details = "all signals OK"
+    logger.warning("RISK %s -> %s :: %s", prev.value, report.worst_status.value, details)
 
 
 def _accrue_funding(
     engine: StrategyEngine,
-    adapter: PaperExecutionAdapter,
+    adapter: ExecutionAdapter,
     coins: list[str],
     notional: float,
 ) -> None:

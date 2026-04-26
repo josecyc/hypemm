@@ -34,6 +34,10 @@ class StrategyEngine:
             pair.label: None for pair in config.pairs
         }
         self.cooldowns: dict[str, int] = {pair.label: 0 for pair in config.pairs}
+        # When True, _check_entry returns None regardless of signal. Set by
+        # the runner from the RiskMonitor when a kill switch is active.
+        # Existing positions continue to be managed by the exit logic.
+        self.halt_entries: bool = False
 
     def process_bar(
         self,
@@ -66,6 +70,10 @@ class StrategyEngine:
     def _check_entry(self, pair: PairConfig, signal: Signal) -> EntryOrder | None:
         """Check if we should enter a position."""
         label = pair.label
+
+        # Portfolio-level kill switch from the risk monitor.
+        if self.halt_entries:
+            return None
 
         if self.cooldowns[label] > 0:
             self.cooldowns[label] -= 1

@@ -13,6 +13,13 @@ from hypemm.config import StrategyConfig
 from hypemm.engine import StrategyEngine
 from hypemm.math import compute_unrealized_pnl
 from hypemm.models import CompletedTrade, Direction, OpenPosition, Signal
+from hypemm.risk import RiskReport, RiskStatus
+
+_STATUS_COLOR = {
+    RiskStatus.OK: "green",
+    RiskStatus.WARN: "yellow",
+    RiskStatus.HALT: "red",
+}
 
 
 def build_dashboard(
@@ -21,12 +28,25 @@ def build_dashboard(
     completed_trades: list[CompletedTrade],
     config: StrategyConfig,
     start_time: str,
+    risk_report: RiskReport | None = None,
+    live_mode: bool = False,
 ) -> Panel:
     """Build the full paper trading dashboard."""
     now = datetime.now(timezone.utc).strftime("%H:%M:%S UTC")
     table = _build_signals_table(engine, signals, config)
     total_unrealized = _total_unrealized(engine, signals, config)
-    parts: list[Table | Text] = [table, Text("")]
+    parts: list[Table | Text] = []
+
+    if risk_report is not None and risk_report.halts_entry:
+        parts.append(_build_halt_banner(risk_report))
+        parts.append(Text(""))
+
+    parts.append(table)
+    parts.append(Text(""))
+
+    if risk_report is not None:
+        parts.append(_build_risk_panel(risk_report))
+        parts.append(Text(""))
 
     if completed_trades:
         parts.append(_build_trades_table(completed_trades))
@@ -34,13 +54,59 @@ def build_dashboard(
 
     parts.append(_build_summary(completed_trades, total_unrealized, config, start_time))
 
+    title_color = "red" if live_mode else "cyan"
+    title_label = "LIVE" if live_mode else "Paper"
+    border = "red" if (risk_report is not None and risk_report.halts_entry) else title_color
+
     return Panel(
         Group(*parts),
-        title="[bold cyan]Stat Arb Paper Trading[/bold cyan]",
+        title=f"[bold {title_color}]Stat Arb {title_label} Trading[/bold {title_color}]",
         subtitle=f"[dim]{now}[/dim]",
-        border_style="cyan",
+        border_style=border,
         expand=False,
     )
+
+
+def _build_halt_banner(report: RiskReport) -> Text:
+    """Big red banner shown above the signals table when entries are halted."""
+    halts = [s for s in report.signals if s.halts_entry]
+    detail = "; ".join(f"{s.name}: {s.detail}" for s in halts)
+    return Text.from_markup(
+        f"[white on red bold] !! ENTRIES HALTED !! [/white on red bold]  [red]{detail}[/red]"
+    )
+
+
+def _build_risk_panel(report: RiskReport) -> Table:
+    """Per-signal risk dashboard panel."""
+    t = Table(title="Risk Monitor", show_header=True, header_style="bold")
+    t.add_column("Signal", width=22)
+    t.add_column("Status", justify="center", width=8)
+    t.add_column("Value", justify="right", width=14)
+    t.add_column("Threshold", justify="right", width=14)
+    t.add_column("Detail", overflow="fold")
+
+    for s in report.signals:
+        color = _STATUS_COLOR[s.status]
+        status_str = f"[{color} bold]{s.status.value}[/{color} bold]"
+        if s.halts_entry:
+            status_str += " [red]⛔[/red]"
+        t.add_row(
+            s.name,
+            status_str,
+            _format_value(s.name, s.value),
+            _format_value(s.name, s.threshold),
+            s.detail,
+        )
+    return t
+
+
+def _format_value(name: str, v: float) -> str:
+    """Format a risk metric value based on signal type."""
+    if name in {"win_rate_drift", "time_stop_drift"}:
+        return f"{v:.0%}"
+    if name == "correlation_drift":
+        return f"{v:.2f}"
+    return f"${v:+,.0f}"
 
 
 def _build_signals_table(

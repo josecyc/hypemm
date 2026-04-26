@@ -50,3 +50,19 @@ ob_collection_duration_sec = 7200
 [sweep]
 lookbacks = [24, 48, 72]
 entry_zs = [1.5, 2.0, 2.5]
+
+# Portfolio-level kill switches and drift detection.
+# Thresholds calibrated against the backtest's -$19,657 worst concurrent
+# unrealized loss (THESIS section 5.3.8). HALT signals block new entries;
+# existing positions are managed by the engine's exit logic.
+[risk]
+unrealized_warn = -10_000.0      # warn when concurrent unrealized below this
+unrealized_halt = -15_000.0      # halt new entries
+daily_loss_halt = -5_000.0       # halt entries if 24h realized below this
+win_rate_window = 30
+win_rate_warn = 0.55
+win_rate_min_trades = 10
+time_stop_window = 20
+time_stop_warn_pct = 0.30
+time_stop_min_trades = 10
+corr_warn_threshold = 0.65       # warn if active pair corr drops below this

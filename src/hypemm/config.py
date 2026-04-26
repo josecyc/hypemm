@@ -88,6 +88,35 @@ class InfraConfig:
 
 
 @dataclass(frozen=True)
+class RiskConfig:
+    """Portfolio-level kill switch and drift detection thresholds.
+
+    Calibrated from THESIS section 5.3.8 against the 7-month backtest's
+    -$19,657 max simultaneous unrealized loss.
+    """
+
+    # Concurrent unrealized P&L (mark-to-market across all open positions)
+    unrealized_warn: float = -10_000.0
+    unrealized_halt: float = -15_000.0
+
+    # 24-hour realized P&L
+    daily_loss_halt: float = -5_000.0
+
+    # Strategy drift: rolling win rate
+    win_rate_window: int = 30
+    win_rate_warn: float = 0.55
+    win_rate_min_trades: int = 10
+
+    # Strategy drift: rolling time-stop ratio
+    time_stop_window: int = 20
+    time_stop_warn_pct: float = 0.30
+    time_stop_min_trades: int = 10
+
+    # Correlation breakdown on an active pair
+    corr_warn_threshold: float = 0.65
+
+
+@dataclass(frozen=True)
 class GateConfig:
     """Thresholds for the validation gates."""
 
@@ -116,6 +145,7 @@ class AppConfig:
     infra: InfraConfig
     gates: GateConfig
     sweep: SweepConfig
+    risk: RiskConfig
 
 
 def load_config(path: Path) -> AppConfig:
@@ -145,4 +175,7 @@ def load_config(path: Path) -> AppConfig:
         sweep_raw["entry_zs"] = tuple(sweep_raw["entry_zs"])
     sweep = SweepConfig(**sweep_raw)
 
-    return AppConfig(strategy=strategy, infra=infra, gates=gates, sweep=sweep)
+    risk_raw = dict(raw.get("risk", {}))
+    risk = RiskConfig(**risk_raw)
+
+    return AppConfig(strategy=strategy, infra=infra, gates=gates, sweep=sweep, risk=risk)

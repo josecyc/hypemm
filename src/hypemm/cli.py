@@ -390,10 +390,25 @@ def cmd_walkforward(args: argparse.Namespace) -> None:
 
 def cmd_run(args: argparse.Namespace) -> None:
     """Start paper or live trading."""
+    from hypemm.execution import build_adapter
     from hypemm.runner import run_paper_loop
 
     app = load_config(Path(args.config))
-    run_paper_loop(app, fresh=args.fresh)
+
+    if args.live:
+        if not args.confirm_live:
+            raise SystemExit(
+                "live trading must be confirmed with --confirm-live "
+                "(this will place real orders against the configured account)"
+            )
+        logging.warning(
+            "LIVE MODE — orders will hit real Hyperliquid markets for the "
+            "account in HYPERLIQUID_ACCOUNT. Capital recommended: $120K at 5x. "
+            "See docs/LIVE_DEPLOYMENT.md."
+        )
+
+    adapter = build_adapter(app.infra.rest_url, live=args.live)
+    run_paper_loop(app, fresh=args.fresh, adapter=adapter, live_mode=args.live)
 
 
 def main() -> None:
@@ -427,9 +442,22 @@ def main() -> None:
     wf_p.add_argument("--step-months", type=int, default=12, help="Step between folds (months)")
     wf_p.set_defaults(func=cmd_walkforward)
 
-    run_p = sub.add_parser("run", help="Start paper trading")
+    run_p = sub.add_parser("run", help="Start paper or live trading")
     run_p.add_argument("--fresh", action="store_true", help="Ignore saved state")
     run_p.add_argument("--config", default="config.toml", help="Config file path")
+    run_p.add_argument(
+        "--live",
+        action="store_true",
+        help=(
+            "Trade with real money via LiveExecutionAdapter "
+            "(requires HYPERLIQUID_PRIVATE_KEY + HYPERLIQUID_ACCOUNT)"
+        ),
+    )
+    run_p.add_argument(
+        "--confirm-live",
+        action="store_true",
+        help="Required alongside --live to acknowledge real-money execution",
+    )
     run_p.set_defaults(func=cmd_run)
 
     args = parser.parse_args()
