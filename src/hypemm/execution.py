@@ -209,16 +209,67 @@ class LiveExecutionAdapter:
         size_a = notional_per_leg / mid_a
         size_b = notional_per_leg / mid_b
 
-        order_id_a = self._place_ioc(meta[pair.coin_a], is_buy_a, size_a, mid_a)
-        order_id_b = self._place_ioc(meta[pair.coin_b], is_buy_b, size_b, mid_b)
+        # Pre-flight: HL rejects orders below $10 notional. We round size to
+        # szDecimals before placing, so check the post-rounding order value.
+        # Better to reject both legs cleanly than fill leg A and orphan it.
+        from hypemm.hl_meta import round_size
 
-        fill_a = self._await_fill(pair.coin_a, order_id_a)
-        fill_b = self._await_fill(pair.coin_b, order_id_b)
+        rounded_a = round_size(size_a, meta[pair.coin_a].sz_decimals)
+        rounded_b = round_size(size_b, meta[pair.coin_b].sz_decimals)
+        for coin, rounded, mid in (
+            (pair.coin_a, rounded_a, mid_a),
+            (pair.coin_b, rounded_b, mid_b),
+        ):
+            if rounded * mid < 10.0:
+                raise ExecutionError(
+                    f"{coin} order value {rounded * mid:.2f} below HL $10 minimum "
+                    f"(notional {notional_per_leg}, size {rounded}, mid {mid:.6f})"
+                )
+
+        order_id_a = self._place_ioc(meta[pair.coin_a], is_buy_a, size_a, mid_a)
+        # If leg B fails AFTER leg A filled, we MUST flatten leg A to avoid an
+        # unhedged position. Try-block scopes that recovery; failures inside
+        # are logged but the original error is what propagates.
+        try:
+            order_id_b = self._place_ioc(meta[pair.coin_b], is_buy_b, size_b, mid_b)
+            fill_a = self._await_fill(pair.coin_a, order_id_a)
+            fill_b = self._await_fill(pair.coin_b, order_id_b)
+        except ExecutionError as e:
+            logger.error("Leg B failed (%s) — attempting to flatten leg A", e)
+            self._flatten_position(meta[pair.coin_a], is_buy_a, size_a, mid_a)
+            raise
 
         self._check_slippage(pair.coin_a, fill_a, mid_a)
         self._check_slippage(pair.coin_b, fill_b, mid_b)
 
         return fill_a, fill_b
+
+    def _flatten_position(
+        self, asset: AssetMeta, was_buy: bool, size: float, mid_price: float
+    ) -> None:
+        """Emergency flatten: place a reduceOnly IoC opposite to the original."""
+        sign = -1 if was_buy else 1  # opposite direction to close
+        crossing_price = mid_price * (1 + sign * (-self.ioc_aggression_bps) / 10_000)
+        crossing_price = round_price(crossing_price, asset.sz_decimals)
+        order = {
+            "a": asset.asset_id,
+            "b": not was_buy,
+            "p": format_price(crossing_price, asset.sz_decimals),
+            "s": format_size(size, asset.sz_decimals),
+            "r": True,  # reduceOnly
+            "t": {"limit": {"tif": "Ioc"}},
+        }
+        action = {"type": "order", "orders": [order], "grouping": "na"}
+        try:
+            resp = self._post_signed(action)
+            logger.warning(
+                "FLATTEN %s: response=%s", asset.coin, resp
+            )
+        except Exception as e:
+            logger.critical(
+                "FLATTEN FAILED for %s — manual intervention required: %s",
+                asset.coin, e,
+            )
 
     def fetch_user_state(self) -> dict[str, Any]:
         """Fetch /info clearinghouseState — used for startup reconciliation."""

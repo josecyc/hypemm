@@ -192,6 +192,54 @@ def test_get_fill_prices_propagates_order_error():
         adapter.get_fill_prices(PairConfig("LINK", "SOL"), Direction.LONG_RATIO, 50_000.0)
 
 
+def test_get_fill_prices_rejects_below_min_order_value():
+    """HL rejects orders < $10 notional; better to abort before placing leg A."""
+    client = _MockClient()
+    client.queue("meta", _meta_payload())
+    client.queue("exchange:updateLeverage", {"status": "ok"})
+    client.queue("exchange:updateLeverage", {"status": "ok"})
+    client.queue("l2Book:LINK", {"levels": [[{"px": "10.0"}], [{"px": "10.02"}]]})
+    client.queue("l2Book:SOL", {"levels": [[{"px": "100.0"}], [{"px": "100.04"}]]})
+    adapter = _make_adapter(client)
+    # $5 per leg → SOL leg rounds to 0.05 (sz_decimals=2) * 100 = $5 < $10
+    with pytest.raises(ExecutionError, match="below HL .10 minimum"):
+        adapter.get_fill_prices(PairConfig("LINK", "SOL"), Direction.LONG_RATIO, 5.0)
+
+
+def test_leg_b_failure_triggers_leg_a_flatten():
+    """If leg B fails after leg A fills we MUST close leg A immediately."""
+    client = _MockClient()
+    client.queue("meta", _meta_payload())
+    client.queue("exchange:updateLeverage", {"status": "ok"})
+    client.queue("exchange:updateLeverage", {"status": "ok"})
+    client.queue("l2Book:LINK", {"levels": [[{"px": "10.0"}], [{"px": "10.02"}]]})
+    client.queue("l2Book:SOL", {"levels": [[{"px": "100.0"}], [{"px": "100.04"}]]})
+    # Leg A places fine
+    client.queue("exchange:order", _ok_status(111, "filled"))
+    # Leg B errors
+    client.queue(
+        "exchange:order",
+        {"status": "ok", "response": {"data": {"statuses": [{"error": "Min size"}]}}},
+    )
+    # Flatten order for leg A succeeds
+    client.queue("exchange:order", _ok_status(222, "filled"))
+    adapter = _make_adapter(client)
+
+    with pytest.raises(ExecutionError, match="Min size"):
+        adapter.get_fill_prices(PairConfig("LINK", "SOL"), Direction.LONG_RATIO, 50_000.0)
+
+    # Verify the flatten order was placed: 3 orders total, the third is reduceOnly
+    order_calls = [
+        c
+        for c in client.calls
+        if "/exchange" in c["url"] and c["json"]["action"]["type"] == "order"
+    ]
+    assert len(order_calls) == 3
+    flatten = order_calls[2]["json"]["action"]["orders"][0]
+    assert flatten["r"] is True  # reduceOnly
+    assert flatten["b"] is False  # opposite of original LONG_RATIO leg A buy
+
+
 # -- fetch_user_state ------------------------------------------------------
 
 
