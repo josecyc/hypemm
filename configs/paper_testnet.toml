@@ -17,9 +17,7 @@ corr_threshold = 0.7
 progress_exit_hours = 12
 progress_exit_pct = 0.10
 
-[[strategy.pairs]]
-coin_a = "LINK"
-coin_b = "SOL"
+# LINK/SOL omitted: LINK is not in HL testnet's universe.
 
 [[strategy.pairs]]
 coin_a = "DOGE"
