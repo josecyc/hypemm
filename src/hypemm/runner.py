@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import sys
 import time
 from dataclasses import replace
@@ -70,9 +71,16 @@ def run_paper_loop(
     mode_label = "LIVE" if live_mode else "paper"
     logging.info("Starting %s trade monitor (Ctrl+C to stop)", mode_label)
 
+    # Render the Live UI when we're in any terminal context — including a
+    # tmux pane where stdout isn't a tty in the strict sense (it's a pipe to
+    # tmux's pty multiplexer). The UI is still meaningful and the user wants
+    # it visible when attached to the session.
+    show_ui = sys.stdout.isatty() or bool(os.environ.get("TMUX"))
+
     try:
-        if sys.stdout.isatty():
-            with Live(console=console, refresh_per_second=0.5) as live:
+        if show_ui:
+            ui_console = Console(force_terminal=True, file=sys.stdout)
+            with Live(console=ui_console, refresh_per_second=0.5, screen=False) as live:
                 _run_loop(
                     engine=engine,
                     adapter=adapter,
@@ -196,6 +204,7 @@ def _run_loop(
             save_state(engine, state_path, start_time)
 
         if live is not None:
+            n_bars = buffer.bar_count
             live.update(
                 build_dashboard(
                     engine,
@@ -205,6 +214,8 @@ def _run_loop(
                     start_time,
                     risk_report=risk_report,
                     live_mode=live_mode,
+                    poll_interval_sec=infra.poll_interval_sec,
+                    n_bars=n_bars,
                 )
             )
         time.sleep(infra.poll_interval_sec)

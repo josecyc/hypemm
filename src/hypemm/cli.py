@@ -102,11 +102,21 @@ def _save_daily_equity_csv(path: Path, trades: list[CompletedTrade]) -> None:
         writer.writerows(rows)
 
 
-def _setup_logging() -> None:
+def _setup_logging(log_file: str | None = None) -> None:
+    """Configure logging.
+
+    By default writes to stderr. When `log_file` is given, also tees to that
+    file — used by the live runner so the Rich UI stays clean while keeping
+    a persistent record of HTTP calls and risk events.
+    """
+    handlers: list[logging.Handler] = [logging.StreamHandler()]
+    if log_file:
+        handlers.append(logging.FileHandler(log_file))
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s [%(name)s] %(message)s",
         datefmt="%H:%M:%S",
+        handlers=handlers,
     )
 
 
@@ -395,6 +405,25 @@ def cmd_run(args: argparse.Namespace) -> None:
 
     app = load_config(Path(args.config))
 
+    # Reroute logs to a file when --log-file is given so they don't smear over
+    # the Rich Live dashboard. The runner re-renders in place; log lines printed
+    # to stderr would interleave with frames and cause flicker.
+    if args.log_file:
+        log_path = Path(args.log_file)
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        for h in list(logging.getLogger().handlers):
+            logging.getLogger().removeHandler(h)
+        logging.getLogger().addHandler(logging.FileHandler(log_path))
+        logging.getLogger().setLevel(logging.INFO)
+        # Inherit the existing format
+        for h in logging.getLogger().handlers:
+            h.setFormatter(
+                logging.Formatter(
+                    fmt="%(asctime)s [%(name)s] %(message)s",
+                    datefmt="%H:%M:%S",
+                )
+            )
+
     if args.live:
         if not args.confirm_live:
             raise SystemExit(
@@ -457,6 +486,14 @@ def main() -> None:
         "--confirm-live",
         action="store_true",
         help="Required alongside --live to acknowledge real-money execution",
+    )
+    run_p.add_argument(
+        "--log-file",
+        default=None,
+        help=(
+            "Route logs to this file instead of stderr — keeps the Rich "
+            "dashboard frame clean inside a tmux pane"
+        ),
     )
     run_p.set_defaults(func=cmd_run)
 

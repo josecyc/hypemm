@@ -30,6 +30,8 @@ def build_dashboard(
     start_time: str,
     risk_report: RiskReport | None = None,
     live_mode: bool = False,
+    poll_interval_sec: int = 60,
+    n_bars: int = 0,
 ) -> Panel:
     """Build the full paper trading dashboard."""
     now = datetime.now(timezone.utc).strftime("%H:%M:%S UTC")
@@ -52,7 +54,17 @@ def build_dashboard(
         parts.append(_build_trades_table(completed_trades))
         parts.append(Text(""))
 
-    parts.append(_build_summary(completed_trades, total_unrealized, config, start_time))
+    parts.append(
+        _build_summary(
+            engine,
+            completed_trades,
+            total_unrealized,
+            config,
+            start_time,
+            poll_interval_sec=poll_interval_sec,
+            n_bars=n_bars,
+        )
+    )
 
     title_color = "red" if live_mode else "cyan"
     title_label = "LIVE" if live_mode else "Paper"
@@ -142,10 +154,12 @@ def _build_signals_table(
 
 
 def _build_trades_table(trades: list[CompletedTrade]) -> Table:
-    """Build the completed trades history table."""
-    t = Table(title="Completed Trades (last 10)", show_header=True, header_style="bold")
+    """Build the completed trades history table (last 10)."""
+    t = Table(title="Completed Trades", show_header=True, header_style="bold")
     t.add_column("Pair", width=12)
     t.add_column("Dir", justify="center", width=3)
+    t.add_column("Entry", justify="right", width=7)
+    t.add_column("Exit", justify="right", width=7)
     t.add_column("Hold", justify="right", width=5)
     t.add_column("Entry Z", justify="right", width=7)
     t.add_column("Net P&L", justify="right", width=10)
@@ -154,24 +168,31 @@ def _build_trades_table(trades: list[CompletedTrade]) -> Table:
     for tr in trades[-10:]:
         d = "L" if tr.direction == Direction.LONG_RATIO else "S"
         nc = "green" if tr.net_pnl > 0 else "red"
+        entry_hh = datetime.fromtimestamp(tr.entry_ts / 1000, tz=timezone.utc).strftime("%H:%M")
+        exit_hh = datetime.fromtimestamp(tr.exit_ts / 1000, tz=timezone.utc).strftime("%H:%M")
         t.add_row(
             tr.pair_label,
             d,
+            entry_hh,
+            exit_hh,
             f"{tr.hours_held}h",
             f"{tr.entry_z:+.2f}",
             f"[{nc}]${tr.net_pnl:+,.0f}[/{nc}]",
-            tr.exit_reason,
+            str(tr.exit_reason),
         )
     return t
 
 
 def _build_summary(
+    engine: StrategyEngine,
     trades: list[CompletedTrade],
     total_unrealized: float,
     config: StrategyConfig,
     start_time: str,
+    poll_interval_sec: int,
+    n_bars: int,
 ) -> Text:
-    """Build summary statistics text."""
+    """Build summary statistics text — matches the legacy hype_mm dashboard layout."""
     total_realized = sum(tr.net_pnl for tr in trades)
     total_pnl = total_realized + total_unrealized
     n = len(trades)
@@ -182,14 +203,45 @@ def _build_summary(
     uc = "green" if total_unrealized >= 0 else "red"
     tc = "green" if total_pnl >= 0 else "red"
 
+    # Runtime / projections
+    try:
+        started = datetime.fromisoformat(start_time)
+    except (TypeError, ValueError):
+        started = datetime.now(timezone.utc)
+    now = datetime.now(timezone.utc)
+    runtime_days = max((now - started).total_seconds() / 86400.0, 1e-9)
+
+    daily_rate = total_realized / runtime_days if runtime_days > 0 else 0.0
+    projected_annual = daily_rate * 365.0
+    # APR at 5x leverage assumes capital = total notional / 5
+    capital_5x = (config.notional_per_leg * 2 * len(config.pairs)) / 5.0
+    apr_5x = (projected_annual / capital_5x) * 100.0 if capital_5x > 0 else 0.0
+    drc = "green" if daily_rate >= 0 else "red"
+    pac = "green" if projected_annual >= 0 else "red"
+
+    # Exposure / margin
+    open_positions = sum(1 for p in engine.positions.values() if p is not None)
+    max_pairs = len(config.pairs)
+    exposure = open_positions * config.notional_per_leg * 2
+    max_exposure = max_pairs * config.notional_per_leg * 2
+    margin_5x = exposure / 5.0
+    max_margin_5x = max_exposure / 5.0
+
     lines = [
         f"Trades: {n}  WR: {wr}  "
         f"Realized: [{rc}]${total_realized:+,.0f}[/{rc}]  "
         f"Unrealized: [{uc}]${total_unrealized:+,.0f}[/{uc}]  "
         f"Total: [{tc} bold]${total_pnl:+,.0f}[/{tc} bold]",
-        f"Notional/leg: ${config.notional_per_leg:,}  "
-        f"Max pairs: {len(config.pairs)}  "
-        f"[dim]Polling every {config.cooldown_hours}h cooldown[/dim]",
+        f"Runtime: {runtime_days:.1f}d  "
+        f"Daily rate: [{drc}]${daily_rate:+,.0f}/day[/{drc}]  "
+        f"Projected annual: [{pac}]${projected_annual:+,.0f}[/{pac}]  "
+        f"APR (5x): [{pac}]{apr_5x:+.0f}%[/{pac}]",
+        f"Notional/leg: ${config.notional_per_leg:,.0f}  "
+        f"Open: {open_positions}/{max_pairs} pairs  "
+        f"Exposure: ${exposure:,.0f} / ${max_exposure:,.0f}  "
+        f"Margin (5x): ${margin_5x:,.0f} / ${max_margin_5x:,.0f}",
+        f"[dim]Bars: {n_bars} │ Next signal eval: top of next hour │ "
+        f"Polling every {poll_interval_sec}s │ State auto-saved[/dim]",
     ]
     return Text.from_markup("\n".join(lines))
 
