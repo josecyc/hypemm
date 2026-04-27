@@ -12,6 +12,7 @@ import httpx
 from hypemm.hl_meta import AssetMeta, fetch_asset_meta, format_price, format_size, round_price
 from hypemm.hl_sign import sign_l1_action
 from hypemm.models import ConfigurationError, DataFetchError, Direction, HypeMMError, PairConfig
+from hypemm.orderbook import book_vwap
 
 logger = logging.getLogger(__name__)
 
@@ -51,7 +52,12 @@ class ExecutionAdapter(Protocol):
 
 
 class PaperExecutionAdapter:
-    """Execute paper trades by fetching current mid prices from Hyperliquid."""
+    """Execute paper trades by walking the live HL L2 book.
+
+    Fills at the realized VWAP for the configured notional, NOT mid. This
+    means paper P&L includes the spread-crossing cost the live runner would
+    pay — same model, no separate slippage calibration needed.
+    """
 
     def __init__(self, rest_url: str) -> None:
         self.rest_url = rest_url
@@ -63,10 +69,21 @@ class PaperExecutionAdapter:
         direction: Direction,
         notional_per_leg: float,
     ) -> tuple[float, float]:
-        """Fetch current mid prices as paper fill prices."""
-        price_a = self.fetch_mid(pair.coin_a)
-        price_b = self.fetch_mid(pair.coin_b)
-        return price_a, price_b
+        """Walk the L2 book on each leg and return the realized VWAP."""
+        is_buy_a = direction == Direction.LONG_RATIO
+        is_buy_b = not is_buy_a
+        fa = book_vwap(self.client, self.rest_url, pair.coin_a, is_buy_a, notional_per_leg)
+        fb = book_vwap(self.client, self.rest_url, pair.coin_b, is_buy_b, notional_per_leg)
+        logger.info(
+            "Paper fill %s %s: %s slip=%.2fbps, %s slip=%.2fbps",
+            pair.label,
+            direction.label,
+            pair.coin_a,
+            fa.slippage_bps,
+            pair.coin_b,
+            fb.slippage_bps,
+        )
+        return fa.vwap, fb.vwap
 
     def fetch_mid(self, coin: str) -> float:
         """Fetch the current mid price for a coin."""

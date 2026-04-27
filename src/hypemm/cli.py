@@ -134,6 +134,7 @@ def cmd_backtest(args: argparse.Namespace) -> None:
     """Run backtest with Gate 1 (Sharpe) and Gate 2 (correlation) checks."""
     from hypemm.backtest import (
         check_backtest_gate,
+        load_slippage_profile,
         run_backtest_all_pairs,
         run_parameter_sweep,
         summarize_backtest,
@@ -147,6 +148,18 @@ def cmd_backtest(args: argparse.Namespace) -> None:
     prices = load_candles(app.infra.candles_dir, config.all_coins)
     funding = load_funding(app.infra.funding_dir, config.all_coins)
 
+    # Auto-load slippage profile if it exists from `hypemm snapshot-slippage`
+    profile = load_slippage_profile(
+        app.infra.data_dir / "slippage_profile.json",
+        percentile=args.slippage_percentile,
+    )
+    if profile:
+        logging.info(
+            "Using per-pair slippage profile (%s): %s",
+            args.slippage_percentile,
+            {k: round(v, 2) for k, v in profile.items()},
+        )
+
     if args.sweep:
         run_parameter_sweep(prices, config, sweep=app.sweep, funding=funding)
         return
@@ -155,10 +168,14 @@ def cmd_backtest(args: argparse.Namespace) -> None:
     logging.info("%d hourly bars, %d days", len(prices), n_days)
 
     unfiltered_config = replace(config, corr_threshold=-1.0)
-    trades_unfiltered = run_backtest_all_pairs(prices, unfiltered_config, funding=funding)
+    trades_unfiltered = run_backtest_all_pairs(
+        prices, unfiltered_config, funding=funding, slippage_profile=profile
+    )
     bt_unfiltered = summarize_backtest(trades_unfiltered, prices)
 
-    trades = run_backtest_all_pairs(prices, config, funding=funding)
+    trades = run_backtest_all_pairs(
+        prices, config, funding=funding, slippage_profile=profile
+    )
     bt_result = summarize_backtest(trades, prices)
 
     logging.info(
@@ -398,6 +415,82 @@ def cmd_walkforward(args: argparse.Namespace) -> None:
     logging.info("Report saved to %s", app.infra.reports_dir / "walkforward_report.json")
 
 
+def cmd_snapshot_slippage(args: argparse.Namespace) -> None:
+    """Build a per-pair slippage profile by polling HL L2 books.
+
+    Polls the L2 book for each coin once per `--interval` seconds for
+    `--duration` minutes, walks the book at the configured notional in both
+    directions, and saves the per-pair median + p90 slippage in bps to
+    data/slippage_profile.json. The backtest reads this file (when present)
+    to apply realistic per-pair spread-crossing costs.
+    """
+    import statistics
+    import time
+
+    import httpx
+
+    from hypemm.orderbook import InsufficientDepthError, book_vwap
+
+    app = load_config(Path(args.config))
+    coins = app.strategy.all_coins
+    notional = app.strategy.notional_per_leg
+    info_url = app.infra.rest_url
+    poll_interval = args.interval
+    duration = args.duration * 60
+
+    samples: dict[str, list[float]] = {coin: [] for coin in coins}
+    client = httpx.Client(timeout=10)
+    deadline = time.monotonic() + duration
+    n_polls = 0
+
+    logging.info(
+        "Snapshotting slippage at $%s notional for %d coins, %ds (interval %ss)",
+        f"{notional:,.0f}", len(coins), duration, poll_interval,
+    )
+    try:
+        while time.monotonic() < deadline:
+            for coin in coins:
+                try:
+                    buy = book_vwap(client, info_url, coin, True, notional)
+                    sell = book_vwap(client, info_url, coin, False, notional)
+                    samples[coin].append((buy.slippage_bps + sell.slippage_bps) / 2)
+                except (InsufficientDepthError, Exception) as e:
+                    logging.warning("%s slip sample skipped: %s", coin, e)
+            n_polls += 1
+            time.sleep(poll_interval)
+    finally:
+        client.close()
+
+    profile: dict[str, dict[str, float | int]] = {}
+    for coin, vals in samples.items():
+        if not vals:
+            logging.warning("%s: no samples collected", coin)
+            continue
+        profile[coin] = {
+            "median_bps": statistics.median(vals),
+            "p90_bps": (
+                statistics.quantiles(vals, n=10)[8] if len(vals) >= 10 else max(vals)
+            ),
+            "max_bps": max(vals),
+            "samples": len(vals),
+        }
+
+    out = {
+        "notional_per_leg": notional,
+        "polls": n_polls,
+        "duration_seconds": duration,
+        "pairs": profile,
+    }
+    out_path = app.infra.data_dir / "slippage_profile.json"
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    _write_report(out_path, out)
+    logging.info("Saved slippage profile to %s", out_path)
+    print()
+    print(f"{'coin':<6} {'samples':>7} {'median bps':>11} {'p90 bps':>9} {'max bps':>9}")
+    for coin, p in sorted(profile.items()):
+        print(f"{coin:<6} {p['samples']:>7} {p['median_bps']:>11.2f} {p['p90_bps']:>9.2f} {p['max_bps']:>9.2f}")
+
+
 def cmd_run(args: argparse.Namespace) -> None:
     """Start paper or live trading."""
     from dataclasses import replace as dc_replace
@@ -486,6 +579,12 @@ def main() -> None:
     bt_p = sub.add_parser("backtest", help="Run backtest")
     bt_p.add_argument("--sweep", action="store_true", help="Run parameter sweep")
     bt_p.add_argument("--config", default="config.toml", help="Config file path")
+    bt_p.add_argument(
+        "--slippage-percentile",
+        choices=["median_bps", "p90_bps", "max_bps"],
+        default="median_bps",
+        help="Which percentile to read from slippage_profile.json (default: median)",
+    )
     bt_p.set_defaults(func=cmd_backtest)
 
     val_p = sub.add_parser("validate", help="Run validation gates")
@@ -498,6 +597,21 @@ def main() -> None:
     wf_p.add_argument("--test-months", type=int, default=12, help="Test window (months)")
     wf_p.add_argument("--step-months", type=int, default=12, help="Step between folds (months)")
     wf_p.set_defaults(func=cmd_walkforward)
+
+    snap_p = sub.add_parser(
+        "snapshot-slippage",
+        help="Sample HL L2 books to build a per-pair slippage profile",
+    )
+    snap_p.add_argument("--config", default="config.toml", help="Config file path")
+    snap_p.add_argument(
+        "--duration", type=int, default=10,
+        help="Total polling duration in minutes (default: 10)",
+    )
+    snap_p.add_argument(
+        "--interval", type=int, default=30,
+        help="Seconds between polls (default: 30)",
+    )
+    snap_p.set_defaults(func=cmd_snapshot_slippage)
 
     run_p = sub.add_parser("run", help="Start paper or live trading")
     run_p.add_argument("--fresh", action="store_true", help="Ignore saved state")

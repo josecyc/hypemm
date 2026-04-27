@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import json
 import logging
 from dataclasses import replace
 from datetime import datetime, timezone
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -42,11 +44,19 @@ def run_backtest(
     pair: PairConfig,
     config: StrategyConfig,
     funding: pd.DataFrame | None = None,
+    slippage_profile: dict[str, float] | None = None,
 ) -> list[CompletedTrade]:
     """Run full backtest on one pair using the strategy engine.
 
-    If funding is provided, deducts per-hour funding cost from each trade's net_pnl.
+    If funding is provided, deducts per-hour funding cost from each trade.
+    If slippage_profile is provided (mapping coin -> bps per side), applies
+    per-pair slippage instead of the constant slippage_per_side_bps. The
+    engine's slippage_per_side_bps is zeroed in this case to avoid double-
+    counting.
     """
+    if slippage_profile is not None:
+        config = replace(config, slippage_per_side_bps=0.0)
+
     pa = prices[pair.coin_a].values
     pb = prices[pair.coin_b].values
     timestamps = prices.index
@@ -123,6 +133,19 @@ def run_backtest(
                         funding_b,
                     )
                     trade = replace(trade, funding_cost=fc, net_pnl=trade.net_pnl - fc)
+                if slippage_profile is not None:
+                    # Per-pair slippage in $: each leg has 2 fills (entry+exit),
+                    # so cost = 2 * notional * slip_bps / 10000 per leg.
+                    slip_a = slippage_profile.get(pair.coin_a, 0.0)
+                    slip_b = slippage_profile.get(pair.coin_b, 0.0)
+                    slip_dollars = (
+                        2 * config.notional_per_leg * (slip_a + slip_b) / 10_000
+                    )
+                    trade = replace(
+                        trade,
+                        cost=trade.cost + slip_dollars,
+                        net_pnl=trade.net_pnl - slip_dollars,
+                    )
                 completed.append(trade)
 
     return completed
@@ -132,11 +155,14 @@ def run_backtest_all_pairs(
     prices: pd.DataFrame,
     config: StrategyConfig,
     funding: pd.DataFrame | None = None,
+    slippage_profile: dict[str, float] | None = None,
 ) -> list[CompletedTrade]:
     """Run backtest across all configured pairs."""
     all_trades: list[CompletedTrade] = []
     for pair in config.pairs:
-        trades = run_backtest(prices, pair, config, funding=funding)
+        trades = run_backtest(
+            prices, pair, config, funding=funding, slippage_profile=slippage_profile
+        )
         all_trades.extend(trades)
         wins = sum(1 for t in trades if t.net_pnl > 0)
         net = sum(t.net_pnl for t in trades)
@@ -166,6 +192,26 @@ def summarize_backtest(
         max_drawdown=max_drawdown(trades),
         monthly=monthly_breakdown(trades),
     )
+
+
+def load_slippage_profile(
+    path: Path, *, percentile: str = "median_bps"
+) -> dict[str, float] | None:
+    """Load a slippage profile JSON written by `hypemm snapshot-slippage`.
+
+    Returns {coin: bps_per_side}, or None if the file is missing. Use
+    percentile="median_bps" for typical conditions, "p90_bps" for stressed.
+    """
+    if not path.exists():
+        return None
+    with open(path) as f:
+        data = json.load(f)
+    pairs = data.get("pairs", {})
+    profile: dict[str, float] = {}
+    for coin, info in pairs.items():
+        if percentile in info:
+            profile[coin] = float(info[percentile])
+    return profile if profile else None
 
 
 def _compute_rolling_corr(pa: np.ndarray, pb: np.ndarray, window: int) -> np.ndarray:
