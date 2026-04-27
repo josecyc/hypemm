@@ -164,32 +164,25 @@ SNAPSHOT_FIELDS = [
 ]
 
 
-def log_hourly_snapshot(
+def _build_snapshot_rows(
     engine: StrategyEngine,
     signals: dict[str, Signal],
     config: StrategyConfig,
-    path: Path,
-) -> None:
-    """Write one row per pair to the hourly snapshot log."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    exists = path.exists()
+) -> list[dict[str, object]]:
+    """One row per pair capturing the current signal + position state."""
     now = datetime.now(timezone.utc).isoformat()
-    rows = []
-
+    rows: list[dict[str, object]] = []
     for pair in config.pairs:
         label = pair.label
         sig = signals.get(label)
         pos = engine.positions.get(label)
         cooldown = engine.cooldowns.get(label, 0)
-
         z = sig.z_score if sig else None
         corr = sig.correlation if sig else None
         status = _signal_status(z, pos is not None, cooldown, corr, config)
-
         upnl = 0.0
         if pos and sig:
             upnl = compute_unrealized_pnl(pos, sig.price_a, sig.price_b, config.notional_per_leg)
-
         rows.append(
             {
                 "timestamp": now,
@@ -206,12 +199,47 @@ def log_hourly_snapshot(
                 "signal_status": status,
             }
         )
+    return rows
 
+
+def log_hourly_snapshot(
+    engine: StrategyEngine,
+    signals: dict[str, Signal],
+    config: StrategyConfig,
+    path: Path,
+) -> None:
+    """Append one row per pair to the hourly snapshot log."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    exists = path.exists()
+    rows = _build_snapshot_rows(engine, signals, config)
     with open(path, "a", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=SNAPSHOT_FIELDS)
         if not exists:
             writer.writeheader()
         writer.writerows(rows)
+
+
+def write_latest_snapshot(
+    engine: StrategyEngine,
+    signals: dict[str, Signal],
+    config: StrategyConfig,
+    path: Path,
+) -> None:
+    """Atomically overwrite a single-tick snapshot file used by the dashboard.
+
+    Same row schema as log_hourly_snapshot, but contains only the current
+    state (one row per pair). Written every tick; the dashboard process
+    reads this for sub-hourly freshness without needing to share memory
+    with the runner.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    rows = _build_snapshot_rows(engine, signals, config)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    with open(tmp, "w", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=SNAPSHOT_FIELDS)
+        writer.writeheader()
+        writer.writerows(rows)
+    tmp.replace(path)
 
 
 def _signal_status(

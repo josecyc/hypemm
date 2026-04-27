@@ -1,4 +1,11 @@
-"""Rich terminal dashboard for paper trading."""
+"""Rich terminal dashboard renderer.
+
+This module is pure rendering: takes a DashboardSnapshot and returns a Panel.
+The snapshot is constructed by `dashboard_loader.load_dashboard_snapshot`
+from on-disk runner artifacts, so the dashboard process is fully decoupled
+from the runner process. Iterate on this file freely without restarting the
+runner — `hypemm dashboard` re-reads disk every refresh.
+"""
 
 from __future__ import annotations
 
@@ -10,7 +17,7 @@ from rich.table import Table
 from rich.text import Text
 
 from hypemm.config import StrategyConfig
-from hypemm.engine import StrategyEngine
+from hypemm.dashboard_loader import DashboardSnapshot
 from hypemm.math import compute_unrealized_pnl
 from hypemm.models import CompletedTrade, Direction, OpenPosition, Signal
 from hypemm.risk import RiskReport, RiskStatus
@@ -22,21 +29,14 @@ _STATUS_COLOR = {
 }
 
 
-def build_dashboard(
-    engine: StrategyEngine,
-    signals: dict[str, Signal],
-    completed_trades: list[CompletedTrade],
-    config: StrategyConfig,
-    start_time: str,
-    risk_report: RiskReport | None = None,
-    live_mode: bool = False,
-    poll_interval_sec: int = 60,
-    n_bars: int = 0,
-) -> Panel:
-    """Build the full paper trading dashboard."""
+def build_dashboard(snapshot: DashboardSnapshot) -> Panel:
+    """Build the full paper trading dashboard from a snapshot."""
     now = datetime.now(timezone.utc).strftime("%H:%M:%S UTC")
-    table = _build_signals_table(engine, signals, config)
-    total_unrealized = _total_unrealized(engine, signals, config)
+    config = snapshot.config
+    risk_report = snapshot.risk_report
+
+    table = _build_signals_table(snapshot.signals, snapshot.positions, snapshot.cooldowns, config)
+    total_unrealized = _total_unrealized(snapshot.positions, snapshot.signals, config)
     parts: list[Table | Text] = []
 
     if risk_report is not None and risk_report.halts_entry:
@@ -50,24 +50,25 @@ def build_dashboard(
         parts.append(_build_risk_panel(risk_report))
         parts.append(Text(""))
 
-    if completed_trades:
-        parts.append(_build_trades_table(completed_trades))
+    if snapshot.completed_trades:
+        parts.append(_build_trades_table(snapshot.completed_trades))
         parts.append(Text(""))
 
     parts.append(
         _build_summary(
-            engine,
-            completed_trades,
+            snapshot.positions,
+            snapshot.completed_trades,
             total_unrealized,
             config,
-            start_time,
-            poll_interval_sec=poll_interval_sec,
-            n_bars=n_bars,
+            snapshot.start_time,
+            poll_interval_sec=snapshot.poll_interval_sec,
+            n_bars=snapshot.n_bars,
+            last_snapshot_iso=snapshot.last_snapshot_iso,
         )
     )
 
-    title_color = "red" if live_mode else "cyan"
-    title_label = "LIVE" if live_mode else "Paper"
+    title_color = "red" if snapshot.live_mode else "cyan"
+    title_label = "LIVE" if snapshot.live_mode else "Paper"
     border = "red" if (risk_report is not None and risk_report.halts_entry) else title_color
 
     return Panel(
@@ -122,8 +123,9 @@ def _format_value(name: str, v: float) -> str:
 
 
 def _build_signals_table(
-    engine: StrategyEngine,
     signals: dict[str, Signal],
+    positions: dict[str, OpenPosition | None],
+    cooldowns: dict[str, int],
     config: StrategyConfig,
 ) -> Table:
     """Build the signals/positions table."""
@@ -139,14 +141,14 @@ def _build_signals_table(
     for pair in config.pairs:
         label = pair.label
         sig = signals.get(label)
-        pos = engine.positions.get(label)
+        pos = positions.get(label)
         z = sig.z_score if sig else None
         corr = sig.correlation if sig else None
 
         z_str = _format_z(z, config.entry_z, config.exit_z)
         corr_str = _format_corr(corr, config.corr_threshold)
         pos_str, hold_str, pnl_str = _format_position(pos, sig, config)
-        signal_str = _format_signal(z, corr, pos, engine.cooldowns.get(label, 0), config)
+        signal_str = _format_signal(z, corr, pos, cooldowns.get(label, 0), config)
 
         t.add_row(label, z_str, corr_str, pos_str, hold_str, pnl_str, signal_str)
 
@@ -184,13 +186,14 @@ def _build_trades_table(trades: list[CompletedTrade]) -> Table:
 
 
 def _build_summary(
-    engine: StrategyEngine,
+    positions: dict[str, OpenPosition | None],
     trades: list[CompletedTrade],
     total_unrealized: float,
     config: StrategyConfig,
     start_time: str,
     poll_interval_sec: int,
     n_bars: int,
+    last_snapshot_iso: str = "",
 ) -> Text:
     """Build summary statistics text — matches the legacy hype_mm dashboard layout."""
     total_realized = sum(tr.net_pnl for tr in trades)
@@ -213,19 +216,23 @@ def _build_summary(
 
     daily_rate = total_realized / runtime_days if runtime_days > 0 else 0.0
     projected_annual = daily_rate * 365.0
-    # APR at 5x leverage assumes capital = total notional / 5
     capital_5x = (config.notional_per_leg * 2 * len(config.pairs)) / 5.0
     apr_5x = (projected_annual / capital_5x) * 100.0 if capital_5x > 0 else 0.0
     drc = "green" if daily_rate >= 0 else "red"
     pac = "green" if projected_annual >= 0 else "red"
 
-    # Exposure / margin
-    open_positions = sum(1 for p in engine.positions.values() if p is not None)
+    open_positions = sum(1 for p in positions.values() if p is not None)
     max_pairs = len(config.pairs)
     exposure = open_positions * config.notional_per_leg * 2
     max_exposure = max_pairs * config.notional_per_leg * 2
     margin_5x = exposure / 5.0
     max_margin_5x = max_exposure / 5.0
+
+    last_seen = (
+        f"Last runner snapshot: {last_snapshot_iso[:19]}Z"
+        if last_snapshot_iso
+        else "Last runner snapshot: ---"
+    )
 
     lines = [
         f"Trades: {n}  WR: {wr}  "
@@ -240,20 +247,20 @@ def _build_summary(
         f"Open: {open_positions}/{max_pairs} pairs  "
         f"Exposure: ${exposure:,.0f} / ${max_exposure:,.0f}  "
         f"Margin (5x): ${margin_5x:,.0f} / ${max_margin_5x:,.0f}",
-        f"[dim]Bars: {n_bars} │ Next signal eval: top of next hour │ "
-        f"Polling every {poll_interval_sec}s │ State auto-saved[/dim]",
+        f"[dim]Bars: {n_bars} │ {last_seen} │ "
+        f"Polling every {poll_interval_sec}s[/dim]",
     ]
     return Text.from_markup("\n".join(lines))
 
 
 def _total_unrealized(
-    engine: StrategyEngine,
+    positions: dict[str, OpenPosition | None],
     signals: dict[str, Signal],
     config: StrategyConfig,
 ) -> float:
     total = 0.0
     for pair in config.pairs:
-        pos = engine.positions.get(pair.label)
+        pos = positions.get(pair.label)
         sig = signals.get(pair.label)
         if pos and sig:
             total += compute_unrealized_pnl(pos, sig.price_a, sig.price_b, config.notional_per_leg)

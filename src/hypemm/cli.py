@@ -488,7 +488,45 @@ def cmd_snapshot_slippage(args: argparse.Namespace) -> None:
     print()
     print(f"{'coin':<6} {'samples':>7} {'median bps':>11} {'p90 bps':>9} {'max bps':>9}")
     for coin, p in sorted(profile.items()):
-        print(f"{coin:<6} {p['samples']:>7} {p['median_bps']:>11.2f} {p['p90_bps']:>9.2f} {p['max_bps']:>9.2f}")
+        print(
+            f"{coin:<6} {p['samples']:>7} {p['median_bps']:>11.2f} "
+            f"{p['p90_bps']:>9.2f} {p['max_bps']:>9.2f}"
+        )
+
+
+def cmd_dashboard(args: argparse.Namespace) -> None:
+    """Render the dashboard from on-disk runner artifacts.
+
+    The dashboard process is fully decoupled from the runner: it reads
+    state.json, paper_trades.csv, and latest_snapshot.csv (or
+    hourly_snapshots.csv as fallback), reconstructs the snapshot, and
+    re-renders Rich Live every --refresh seconds. Iterate freely on
+    dashboard.py without restarting the runner.
+    """
+    import time
+
+    from rich.console import Console
+    from rich.live import Live
+
+    from hypemm.dashboard import build_dashboard
+    from hypemm.dashboard_loader import load_dashboard_snapshot
+
+    app = load_config(Path(args.config))
+    console = Console(force_terminal=True)
+
+    if args.once:
+        snapshot = load_dashboard_snapshot(app, fresh=args.fresh)
+        console.print(build_dashboard(snapshot))
+        return
+
+    with Live(console=console, refresh_per_second=2, screen=False) as live:
+        while True:
+            try:
+                snapshot = load_dashboard_snapshot(app, fresh=args.fresh)
+                live.update(build_dashboard(snapshot))
+            except Exception as e:
+                logging.warning("dashboard refresh skipped: %s", e)
+            time.sleep(args.refresh)
 
 
 def cmd_run(args: argparse.Namespace) -> None:
@@ -612,6 +650,25 @@ def main() -> None:
         help="Seconds between polls (default: 30)",
     )
     snap_p.set_defaults(func=cmd_snapshot_slippage)
+
+    dash_p = sub.add_parser(
+        "dashboard",
+        help="Render the dashboard from on-disk runner artifacts (decoupled from runner)",
+    )
+    dash_p.add_argument("--config", default="config.toml", help="Config file path")
+    dash_p.add_argument(
+        "--refresh", type=float, default=5.0,
+        help="Seconds between dashboard refreshes (default: 5)",
+    )
+    dash_p.add_argument(
+        "--fresh", action="store_true",
+        help="Ignore on-disk history; render an empty starting view",
+    )
+    dash_p.add_argument(
+        "--once", action="store_true",
+        help="Render once and exit (no Live loop) — useful for snapshots/CI",
+    )
+    dash_p.set_defaults(func=cmd_dashboard)
 
     run_p = sub.add_parser("run", help="Start paper or live trading")
     run_p.add_argument("--fresh", action="store_true", help="Ignore saved state")

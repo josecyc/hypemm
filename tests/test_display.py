@@ -2,14 +2,14 @@
 
 from __future__ import annotations
 
-from hypemm.config import StrategyConfig
+from hypemm.config import RiskConfig, StrategyConfig
 from hypemm.dashboard import (
     _format_corr,
     _format_signal,
     _format_z,
     build_dashboard,
 )
-from hypemm.engine import StrategyEngine
+from hypemm.dashboard_loader import DashboardSnapshot
 from hypemm.models import (
     CompletedTrade,
     Direction,
@@ -20,14 +20,23 @@ from hypemm.models import (
 )
 
 
+def _empty_snapshot(config: StrategyConfig) -> DashboardSnapshot:
+    return DashboardSnapshot(
+        config=config,
+        risk_config=RiskConfig(),
+        start_time="2025-01-01T00:00:00+00:00",
+        completed_trades=[],
+        positions={p.label: None for p in config.pairs},
+        cooldowns={p.label: 0 for p in config.pairs},
+    )
+
+
 class TestBuildDashboard:
     def test_renders_without_crash(self, default_config: StrategyConfig) -> None:
-        engine = StrategyEngine(default_config)
-        panel = build_dashboard(engine, {}, [], default_config, "2025-01-01T00:00:00Z")
+        panel = build_dashboard(_empty_snapshot(default_config))
         assert panel is not None
 
     def test_renders_with_signals(self, default_config: StrategyConfig) -> None:
-        engine = StrategyEngine(default_config)
         pair = default_config.pairs[0]
         sig = Signal(
             pair=pair,
@@ -38,13 +47,14 @@ class TestBuildDashboard:
             timestamp_ms=1000000,
             n_bars=100,
         )
-        panel = build_dashboard(
-            engine, {pair.label: sig}, [], default_config, "2025-01-01T00:00:00Z"
+        snap = _empty_snapshot(default_config)
+        snap = DashboardSnapshot(
+            **{**snap.__dict__, "signals": {pair.label: sig}}
         )
+        panel = build_dashboard(snap)
         assert panel is not None
 
     def test_renders_with_trades(self, default_config: StrategyConfig) -> None:
-        engine = StrategyEngine(default_config)
         trade = CompletedTrade(
             pair_label="LINK/SOL",
             direction=Direction.LONG_RATIO,
@@ -65,7 +75,9 @@ class TestBuildDashboard:
             exit_reason=ExitReason.MEAN_REVERT,
             entry_correlation=0.85,
         )
-        panel = build_dashboard(engine, {}, [trade], default_config, "2025-01-01T00:00:00Z")
+        snap = _empty_snapshot(default_config)
+        snap = DashboardSnapshot(**{**snap.__dict__, "completed_trades": [trade]})
+        panel = build_dashboard(snap)
         assert panel is not None
 
 

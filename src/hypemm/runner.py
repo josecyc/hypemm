@@ -1,20 +1,21 @@
-"""Paper trading loop: poll prices, compute signals, execute orders."""
+"""Paper / live trading loop. Headless: no terminal UI.
+
+Persists state, trades, hourly snapshots, and a per-tick latest_snapshot.csv
+to disk. Render the dashboard as a separate process via `hypemm dashboard`,
+which reads from those files. This decoupling means the dashboard can be
+iterated on, restarted, or run from a different machine without disturbing
+the runner's price-buffer warmup or exchange-bound state.
+"""
 
 from __future__ import annotations
 
 import logging
-import os
-import sys
 import time
 from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
 
-from rich.console import Console
-from rich.live import Live
-
 from hypemm.config import AppConfig
-from hypemm.dashboard import build_dashboard
 from hypemm.data import seed_price_buffer
 from hypemm.engine import StrategyEngine
 from hypemm.execution import ExecutionAdapter, PaperExecutionAdapter
@@ -26,12 +27,18 @@ from hypemm.models import (
     ExitOrder,
     HypeMMError,
 )
-from hypemm.persistence import load_state, load_trades, log_hourly_snapshot, log_trade, save_state
+from hypemm.persistence import (
+    load_state,
+    load_trades,
+    log_hourly_snapshot,
+    log_trade,
+    save_state,
+    write_latest_snapshot,
+)
 from hypemm.price_buffer import HourlyPriceBuffer
 from hypemm.risk import RiskReport, RiskStatus, compute_risk_report
 from hypemm.signals import compute_pair_signal
 
-console = Console()
 logger = logging.getLogger(__name__)
 
 
@@ -42,11 +49,11 @@ def run_paper_loop(
     live_mode: bool = False,
     force_reconcile: bool = False,
 ) -> None:
-    """Run the paper trading monitor loop.
+    """Run the trading monitor loop. Headless — no terminal UI.
 
-    By default, paper-trades against the Hyperliquid mid-price. Pass an explicit
-    adapter (e.g. LiveExecutionAdapter) to switch execution mode. live_mode only
-    affects dashboard styling — the live adapter is what actually places orders.
+    Pass an explicit adapter (e.g. LiveExecutionAdapter) to switch execution
+    mode. live_mode flips the dashboard label that gets persisted in the
+    latest snapshot, so a dashboard reader can render it appropriately.
     """
     config = app.strategy
     infra = app.infra
@@ -58,28 +65,31 @@ def run_paper_loop(
     state_path = infra.paper_trades_dir / "state.json"
     trades_path = infra.paper_trades_dir / "paper_trades.csv"
     snapshot_path = infra.paper_trades_dir / "hourly_snapshots.csv"
+    latest_path = infra.paper_trades_dir / "latest_snapshot.csv"
+    mode_path = infra.paper_trades_dir / "mode.txt"
     start_time = datetime.now(timezone.utc).isoformat()
 
     completed_trades: list[CompletedTrade] = []
     if not fresh and state_path.exists():
         start_time = load_state(engine, state_path)
         completed_trades = load_trades(trades_path)
-        logging.info("Resumed with %d completed trades", len(completed_trades))
+        logger.info("Resumed with %d completed trades", len(completed_trades))
 
     buffer = HourlyPriceBuffer(config.all_coins)
     seed_price_buffer(buffer, config, infra)
 
+    # Persist mode for the dashboard reader to pick up
+    mode_path.parent.mkdir(parents=True, exist_ok=True)
+    mode_path.write_text("LIVE" if live_mode else "paper")
+
     mode_label = "LIVE" if live_mode else "paper"
 
-    # Pre-flight: in live mode, reconcile engine state vs the exchange so we
-    # don't blindly trust state.json after a crash or manual intervention.
     if live_mode:
         from hypemm.reconcile import reconcile
 
         if not hasattr(adapter, "fetch_user_state"):
             raise RuntimeError(
-                "live mode requires an adapter with fetch_user_state; "
-                "use LiveExecutionAdapter"
+                "live mode requires an adapter with fetch_user_state; use LiveExecutionAdapter"
             )
         user_state = adapter.fetch_user_state()
         divergences = reconcile(engine, user_state, config.notional_per_leg)
@@ -87,7 +97,10 @@ def run_paper_loop(
             for d in divergences:
                 logger.error(
                     "RECONCILE divergence: %s expected %s %.6f, exchange has %.6f",
-                    d.coin, d.expected_direction, d.expected_size, d.actual_size,
+                    d.coin,
+                    d.expected_direction,
+                    d.expected_size,
+                    d.actual_size,
                 )
             if not force_reconcile:
                 raise RuntimeError(
@@ -101,50 +114,24 @@ def run_paper_loop(
                 len(divergences),
             )
 
-    logging.info("Starting %s trade monitor (Ctrl+C to stop)", mode_label)
-
-    # Render the Live UI when we're in any terminal context — including a
-    # tmux pane where stdout isn't a tty in the strict sense (it's a pipe to
-    # tmux's pty multiplexer). The UI is still meaningful and the user wants
-    # it visible when attached to the session.
-    show_ui = sys.stdout.isatty() or bool(os.environ.get("TMUX"))
+    logger.info("Starting %s trade monitor (Ctrl+C to stop)", mode_label)
 
     try:
-        if show_ui:
-            ui_console = Console(force_terminal=True, file=sys.stdout)
-            with Live(console=ui_console, refresh_per_second=0.5, screen=False) as live:
-                _run_loop(
-                    engine=engine,
-                    adapter=adapter,
-                    app=app,
-                    buffer=buffer,
-                    completed_trades=completed_trades,
-                    state_path=state_path,
-                    trades_path=trades_path,
-                    snapshot_path=snapshot_path,
-                    start_time=start_time,
-                    live=live,
-                    live_mode=live_mode,
-                )
-        else:
-            logging.info("No interactive TTY detected, running headless %s loop", mode_label)
-            _run_loop(
-                engine=engine,
-                adapter=adapter,
-                app=app,
-                buffer=buffer,
-                completed_trades=completed_trades,
-                state_path=state_path,
-                trades_path=trades_path,
-                snapshot_path=snapshot_path,
-                start_time=start_time,
-                live=None,
-                live_mode=live_mode,
-            )
-
+        _run_loop(
+            engine=engine,
+            adapter=adapter,
+            app=app,
+            buffer=buffer,
+            completed_trades=completed_trades,
+            state_path=state_path,
+            trades_path=trades_path,
+            snapshot_path=snapshot_path,
+            latest_path=latest_path,
+            start_time=start_time,
+        )
     except KeyboardInterrupt:
         save_state(engine, state_path, start_time)
-        logging.info("%s trading stopped. State saved.", mode_label)
+        logger.info("%s trading stopped. State saved.", mode_label)
     finally:
         if owns_adapter:
             adapter.close()
@@ -160,9 +147,8 @@ def _run_loop(
     state_path: Path,
     trades_path: Path,
     snapshot_path: Path,
+    latest_path: Path,
     start_time: str,
-    live: Live | None,
-    live_mode: bool,
 ) -> None:
     config = app.strategy
     infra = app.infra
@@ -175,7 +161,7 @@ def _run_loop(
             try:
                 prices[coin] = adapter.fetch_mid(coin)
             except DataFetchError:
-                logging.warning("Failed to fetch price for %s", coin)
+                logger.warning("Failed to fetch price for %s", coin)
             time.sleep(0.3)
 
         now_ms = int(time.time() * 1000)
@@ -235,21 +221,9 @@ def _run_loop(
             log_hourly_snapshot(engine, signals, config, snapshot_path)
             save_state(engine, state_path, start_time)
 
-        if live is not None:
-            n_bars = buffer.bar_count
-            live.update(
-                build_dashboard(
-                    engine,
-                    signals,
-                    completed_trades,
-                    config,
-                    start_time,
-                    risk_report=risk_report,
-                    live_mode=live_mode,
-                    poll_interval_sec=infra.poll_interval_sec,
-                    n_bars=n_bars,
-                )
-            )
+        # Per-tick: refresh the dashboard's view of current signals & state
+        write_latest_snapshot(engine, signals, config, latest_path)
+
         time.sleep(infra.poll_interval_sec)
 
 
