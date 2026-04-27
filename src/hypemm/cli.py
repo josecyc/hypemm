@@ -400,10 +400,23 @@ def cmd_walkforward(args: argparse.Namespace) -> None:
 
 def cmd_run(args: argparse.Namespace) -> None:
     """Start paper or live trading."""
+    from dataclasses import replace as dc_replace
+
     from hypemm.execution import build_adapter
     from hypemm.runner import run_paper_loop
 
     app = load_config(Path(args.config))
+
+    # In live mode, real fill prices already include spread-crossing, so
+    # subtracting a simulated slippage on top would double-count. Zero it.
+    # Paper / backtest keep the configured value to project realistic costs.
+    if args.live and app.strategy.slippage_per_side_bps != 0.0:
+        logging.info(
+            "live mode: zeroing slippage_per_side_bps (was %.2f) — actual "
+            "fills already reflect spread crossing",
+            app.strategy.slippage_per_side_bps,
+        )
+        app = dc_replace(app, strategy=dc_replace(app.strategy, slippage_per_side_bps=0.0))
 
     # Reroute logs to a file when --log-file is given so they don't smear over
     # the Rich Live dashboard. The runner re-renders in place; log lines printed

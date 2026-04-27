@@ -106,3 +106,25 @@ def test_exception_hierarchy() -> None:
     assert issubclass(StateCorruptionError, HypeMMError)
     assert issubclass(ConfigurationError, HypeMMError)
     assert issubclass(HypeMMError, Exception)
+
+
+def test_round_trip_cost_includes_fee_only_by_default() -> None:
+    """Default config: fee=2 bps, slip=0 → $40 round-trip on $50K notional."""
+    from hypemm.config import StrategyConfig
+
+    cfg = StrategyConfig(pairs=(PairConfig("LINK", "SOL"),))
+    # 4 sides × 50_000 × (2 + 0) bps / 10_000 = $40
+    assert cfg.round_trip_cost == 40.0
+
+
+def test_round_trip_cost_adds_slippage() -> None:
+    """slippage_per_side_bps stacks on top of cost_per_side_bps."""
+    from hypemm.config import StrategyConfig
+
+    cfg = StrategyConfig(
+        pairs=(PairConfig("LINK", "SOL"),),
+        cost_per_side_bps=2.0,
+        slippage_per_side_bps=3.0,
+    )
+    # 4 sides × 50_000 × (2 + 3) bps / 10_000 = $100
+    assert cfg.round_trip_cost == 100.0

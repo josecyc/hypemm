@@ -9,7 +9,15 @@ exit_z = 0.5
 max_hold_hours = 36
 stop_loss_z = 4.0
 notional_per_leg = 50_000
+# Fee = HL maker fee (2 bps). Slippage default 0 because:
+#   - Backtest validates strategy at hourly mids → no slippage to model
+#   - Paper trading fills at HL mid via fetch_mid → 0 actual slippage
+#   - Live trading: real fills already include spread, CLI auto-zeros slippage
+# To project mainnet P&L impact of spread crossing, run a backtest with
+# slippage_per_side_bps = 3 (calibrated 2026-04-26: 1 bps slip ≈ -$20/trade
+# at $50K notional, so 3 bps ≈ -$60/trade or ~14% of optimized's $425/trade).
 cost_per_side_bps = 2.0
+slippage_per_side_bps = 0.0
 cooldown_hours = 2
 corr_window_hours = 168
 corr_threshold = 0.7

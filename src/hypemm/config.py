@@ -27,7 +27,18 @@ class StrategyConfig:
     max_hold_hours: int = 48
     stop_loss_z: float = 4.0
     notional_per_leg: float = 50_000
+    # cost_per_side_bps = HL maker fee (2 bps at our volume tier).
+    # Both fee and slippage compound across 4 sides per trade: leg-A entry,
+    # leg-A exit, leg-B entry, leg-B exit. round_trip_cost folds them in.
     cost_per_side_bps: float = 2.0
+    # slippage_per_side_bps = simulated spread-crossing for backtest/paper.
+    # Live runs ZERO this automatically (CLI does dataclass-replace) because
+    # actual fills already reflect spread. Set this in your config to project
+    # what live conditions would cost on paper.
+    # Reference: testnet 2026-04-26 saw 5-10 bps on $200/leg IoC fills; at
+    # $50K/leg on mainnet the THESIS pairs should sit closer to 2-4 bps given
+    # their orderbook depth (THESIS section 3.6).
+    slippage_per_side_bps: float = 0.0
     cooldown_hours: int = 2
     corr_window_hours: int = 168
     corr_threshold: float = 0.7
@@ -41,8 +52,15 @@ class StrategyConfig:
 
     @property
     def round_trip_cost(self) -> float:
-        """Total cost for a round-trip trade (enter + exit both legs)."""
-        return self.notional_per_leg * 2 * self.cost_per_side_bps / 10_000 * 2
+        """Total cost for a round-trip trade: fee + slippage across 4 sides.
+
+        4 sides = leg-A enter, leg-A exit, leg-B enter, leg-B exit.
+        Cost in $: notional * 4 * (fee_bps + slip_bps) / 10000.
+        At default $50K notional, 2 bps fee, 0 slippage: $40 round trip.
+        With 3 bps slippage on mainnet: $100 round trip.
+        """
+        bps_per_side = self.cost_per_side_bps + self.slippage_per_side_bps
+        return self.notional_per_leg * 4 * bps_per_side / 10_000
 
     @property
     def all_coins(self) -> list[str]:

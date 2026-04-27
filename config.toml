@@ -17,6 +17,7 @@ max_hold_hours = 36
 stop_loss_z = 4.0
 notional_per_leg = 50_000
 cost_per_side_bps = 2.0
+slippage_per_side_bps = 0.0
 cooldown_hours = 2
 corr_window_hours = 168
 corr_threshold = 0.7
