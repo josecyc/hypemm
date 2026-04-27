@@ -519,11 +519,23 @@ def cmd_dashboard(args: argparse.Namespace) -> None:
         console.print(build_dashboard(snapshot))
         return
 
-    with Live(console=console, refresh_per_second=2, screen=False) as live:
+    # screen=True opens an alternate-screen buffer. Rich's cursor-up redraw
+    # in inline mode (screen=False) doesn't handle a frame whose height
+    # grows or shrinks between updates — over SSH+tmux this manifests as
+    # stacked Panel headers. Alt-screen mode draws fresh into a scratch
+    # buffer; tmux restores the original pane content when the dashboard
+    # exits cleanly.
+    with Live(
+        console=console,
+        refresh_per_second=4,
+        screen=True,
+        auto_refresh=False,
+        transient=False,
+    ) as live:
         while True:
             try:
                 snapshot = load_dashboard_snapshot(app, fresh=args.fresh)
-                live.update(build_dashboard(snapshot))
+                live.update(build_dashboard(snapshot), refresh=True)
             except Exception as e:
                 logging.warning("dashboard refresh skipped: %s", e)
             time.sleep(args.refresh)
