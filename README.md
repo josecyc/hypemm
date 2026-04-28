@@ -68,8 +68,10 @@ scripts/launch.sh tail  configs/paper/optimized_4pair.toml
 # Testnet
 scripts/launch.sh start configs/testnet/optimized_3pair.toml
 
-# Mainnet live (read docs/LIVE_DEPLOYMENT.md first)
+# Mainnet live (read docs/LIVE_DEPLOYMENT.md first).
+# Always start the paper twin alongside it for head-to-head comparison.
 scripts/launch.sh live  configs/live/min_size_4pair.toml
+scripts/launch.sh start configs/paper/min_size_4pair.toml
 ```
 
 Watch a running instance:
@@ -84,9 +86,9 @@ The `min_size_4pair` live config is sized to Hyperliquid's minimum: $25/leg ×
 ## Server Access
 
 ```bash
-tailscale ssh dark-forest-guardian@100.91.78.8
-screen -ls                               # what's running
-screen -r hypemm-paper-optimized_4pair    # attach
+ssh -p 6969 dark-forest-guardian@100.91.78.8
+tmux ls                                  # what's running
+tmux attach -t hypemm-paper-min_size_4pair  # attach (Ctrl-b d to detach)
 ```
 
 ## Strategy

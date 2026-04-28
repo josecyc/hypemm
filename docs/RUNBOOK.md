@@ -42,8 +42,13 @@ Outputs land in `data/runs/backtest/<stem>/` automatically.
 
 ## Running Paper / Testnet / Live
 
-All instances are launched through `scripts/launch.sh`, which derives the
-session name and run directory from the config path.
+All instances are launched through `scripts/launch.sh`, which derives the tmux
+session name and run directory from the config path. Each session has the
+runner in pane `0.0` and the dashboard in pane `0.1`.
+
+**Live always runs with a paper twin at the same config stem.** Start the live
+instance and its paper counterpart together; compare the dashboards as the
+primary live-monitoring tool.
 
 ```bash
 # Paper
@@ -58,8 +63,10 @@ scripts/launch.sh fresh  configs/paper/optimized_4pair.toml
 # Testnet
 scripts/launch.sh start  configs/testnet/optimized_3pair.toml
 
-# Mainnet live (real money — read LIVE_DEPLOYMENT.md first)
-scripts/launch.sh live   configs/live/min_size_4pair.toml
+# Mainnet live (real money — read LIVE_DEPLOYMENT.md first).
+# Always launch the paper twin at the same stem alongside it.
+scripts/launch.sh live  configs/live/min_size_4pair.toml
+scripts/launch.sh start configs/paper/min_size_4pair.toml
 ```
 
 ## Watching A Running Instance
@@ -88,19 +95,23 @@ positions and may double-trade.
 
 ## Server Layout
 
-The remote server runs each instance in its own `screen` session. Naming:
+The remote server runs each instance in its own tmux session. Naming:
 
 ```
 hypemm-<mode>-<stem>
 ```
 
-derived mechanically from the config path. Ten concurrent instances are fine
-as long as they have isolated config + data dirs.
+derived mechanically from the config path. Each session has two panes:
+
+```
+0.0  runner
+0.1  dashboard
+```
 
 ```bash
-ssh dark-forest-guardian@100.91.78.8
-screen -ls                                       # list running instances
-screen -r hypemm-paper-optimized_4pair           # attach to one (Ctrl-a d to detach)
+ssh -p 6969 dark-forest-guardian@100.91.78.8
+tmux ls                                          # list running instances
+tmux attach -t hypemm-paper-min_size_4pair       # attach (Ctrl-b d to detach)
 ```
 
 ## Adding A New Instance

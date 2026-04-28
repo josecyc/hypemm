@@ -101,10 +101,20 @@ Each headline research claim should have a frozen report under
 Reports are immutable once committed. Re-running the same study produces a
 new, dated report — never an in-place edit.
 
+## Live Always Runs With A Paper Twin
+
+For every `configs/live/<stem>.toml` there must be a matching
+`configs/paper/<stem>.toml` with identical strategy params, sizing, and risk
+thresholds. The two run side-by-side on the server so divergence in fills,
+P&L, or trade selection points to a real live-vs-simulated discrepancy rather
+than config drift. `tests/test_paired_configs.py` enforces this in CI.
+
 ## When Adding A New Instance Or Backtest
 
 1. Create a config under the right `configs/<mode>/` directory.
-2. The output dir is automatic — don't pre-create it.
-3. For runtime: launch with `scripts/launch.sh start configs/<mode>/<name>.toml`.
-4. Update `docs/CURRENT_STATE.md` if the instance is going to run on the
+2. If it's a live config, also add the paper twin at `configs/paper/<stem>.toml`
+   with identical `[strategy]` and `[risk]` sections.
+3. The output dir is automatic — don't pre-create it.
+4. For runtime: launch with `scripts/launch.sh start configs/<mode>/<name>.toml`.
+5. Update `docs/CURRENT_STATE.md` if the instance is going to run on the
    server long-term.

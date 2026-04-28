@@ -1,19 +1,24 @@
 #!/usr/bin/env bash
-# Launch a hypemm runtime instance in a detached `screen` session.
+# Launch a hypemm runtime instance in a detached tmux session.
 #
 # Convention (must match src/hypemm/config.py:derive_run_dir):
 #   configs/<mode>/<stem>.toml  →  data/runs/<mode>/<stem>/  →  hypemm-<mode>-<stem>
+#
+# Each instance lives in its own tmux session with two panes:
+#   0.0  runner (the hypemm process)
+#   0.1  dashboard (read-only, can be detached/reattached freely)
 #
 # Usage:
 #   scripts/launch.sh <subcommand> configs/<mode>/<stem>.toml [extra args...]
 #
 # Subcommands:
-#   start        — start (resume on-disk state)
-#   fresh        — start with --fresh (ignore on-disk state)
-#   stop         — kill the screen session
-#   status       — print whether it's running
-#   tail         — tail -f the runner log
-#   live         — start with --live --confirm-live (real money; mainnet only)
+#   start   — start (resume on-disk state)
+#   fresh   — start with --fresh (ignore on-disk state)
+#   live    — start with --live --confirm-live (real money; mainnet only)
+#   stop    — kill the tmux session
+#   status  — print whether it's running
+#   tail    — tail -f the runner log
+#   attach  — tmux attach to the session
 #
 # Example:
 #   scripts/launch.sh start configs/paper/optimized_4pair.toml
@@ -25,7 +30,7 @@ cmd="${1:-}"
 config_arg="${2:-}"
 
 usage() {
-  echo "usage: $0 {start|fresh|stop|status|tail|live} <config-path> [extra args...]"
+  echo "usage: $0 {start|fresh|live|stop|status|tail|attach} <config-path> [extra args...]"
   exit 1
 }
 
@@ -38,7 +43,6 @@ extra_args=("$@")
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
-# Resolve config path relative to repo root if not absolute.
 if [[ "$config_arg" = /* ]]; then
   CONFIG_PATH="$config_arg"
 else
@@ -50,7 +54,6 @@ if [[ ! -f "$CONFIG_PATH" ]]; then
   exit 1
 fi
 
-# Derive mode + stem from the config path.
 rel="${CONFIG_PATH#$ROOT_DIR/}"
 case "$rel" in
   configs/*/*.toml) ;;
@@ -66,84 +69,96 @@ stem="${stem_file%.toml}"
 
 RUN_DIR="$ROOT_DIR/data/runs/$mode/$stem"
 LOG_FILE="$RUN_DIR/runner.log"
-SESSION_NAME="hypemm-$mode-$stem"
+SESSION="hypemm-$mode-$stem"
 
 mkdir -p "$RUN_DIR"
 
-ensure_screen() {
-  if ! command -v screen >/dev/null 2>&1; then
-    echo "screen is required but not installed" >&2
+ensure_tmux() {
+  if ! command -v tmux >/dev/null 2>&1; then
+    echo "tmux is required but not installed" >&2
     exit 1
   fi
 }
 
 is_running() {
-  local sessions
-  sessions="$(screen -ls 2>/dev/null || true)"
-  printf '%s\n' "$sessions" | grep -Eq "[[:space:]][0-9]+\\.${SESSION_NAME}[[:space:]]"
+  tmux has-session -t "$SESSION" 2>/dev/null
 }
 
-session_id() {
-  local sessions
-  sessions="$(screen -ls 2>/dev/null || true)"
-  printf '%s\n' "$sessions" | awk '/[[:space:]][0-9]+\.'"${SESSION_NAME}"'[[:space:]]/ {print $1; exit}'
+# Build the runner command, log-redirected so the dashboard pane stays clean.
+runner_cmd_for() {
+  local extra="$*"
+  printf 'cd %q && uv run hypemm run --config %q %s --log-file %q' \
+    "$ROOT_DIR" "$CONFIG_PATH" "$extra" "$LOG_FILE"
+}
+
+dashboard_cmd() {
+  printf 'cd %q && uv run hypemm dashboard --config %q' \
+    "$ROOT_DIR" "$CONFIG_PATH"
 }
 
 start_session() {
-  local extra="$*"
+  local runner_cmd
+  runner_cmd="$(runner_cmd_for "$@")"
   : >"$LOG_FILE"
-  screen -dmS "$SESSION_NAME" bash -lc \
-    "cd '$ROOT_DIR' && exec uv run hypemm run --config '$CONFIG_PATH' ${extra} >>'$LOG_FILE' 2>&1"
-  sleep 3
+  # Pane 0.0: runner. Pane 0.1 (split below): dashboard.
+  tmux new-session -d -s "$SESSION" -n hypemm "$runner_cmd"
+  # Give the runner a moment to start before splitting the dashboard.
+  sleep 2
+  tmux split-window -t "$SESSION:0" -h "$(dashboard_cmd)"
+  tmux select-pane -t "$SESSION:0.0"
   if ! is_running; then
-    echo "failed to start $SESSION_NAME" >&2
+    echo "failed to start $SESSION" >&2
     exit 1
   fi
 }
 
 case "$cmd" in
   start)
-    ensure_screen
+    ensure_tmux
     if is_running; then
-      echo "$SESSION_NAME already running ($(session_id))"
+      echo "$SESSION already running"
       exit 0
     fi
     start_session "${extra_args[@]}"
-    echo "started $SESSION_NAME ($(session_id))"
+    echo "started $SESSION"
     echo "log: $LOG_FILE"
+    echo "attach: tmux attach -t $SESSION"
     ;;
   fresh)
-    ensure_screen
+    ensure_tmux
     if is_running; then
-      echo "$SESSION_NAME already running ($(session_id)); stop first" >&2
+      echo "$SESSION already running; stop first" >&2
       exit 1
     fi
     start_session --fresh "${extra_args[@]}"
-    echo "started $SESSION_NAME with --fresh ($(session_id))"
+    echo "started $SESSION with --fresh"
     echo "log: $LOG_FILE"
+    echo "attach: tmux attach -t $SESSION"
     ;;
   live)
-    ensure_screen
+    ensure_tmux
     if is_running; then
-      echo "$SESSION_NAME already running ($(session_id))"
+      echo "$SESSION already running"
       exit 0
     fi
     start_session --live --confirm-live "${extra_args[@]}"
-    echo "started $SESSION_NAME (LIVE) ($(session_id))"
+    echo "started $SESSION (LIVE)"
     echo "log: $LOG_FILE"
+    echo "attach: tmux attach -t $SESSION"
     ;;
   stop)
     if ! is_running; then
-      echo "$SESSION_NAME is not running"
+      echo "$SESSION is not running"
       exit 0
     fi
-    screen -S "$SESSION_NAME" -X quit
-    echo "stopped $SESSION_NAME"
+    tmux kill-session -t "$SESSION"
+    echo "stopped $SESSION"
     ;;
   status)
     if is_running; then
-      echo "running ($(session_id))"
+      echo "running"
       echo "log: $LOG_FILE"
+      echo "attach: tmux attach -t $SESSION"
     else
       echo "not running"
     fi
@@ -151,6 +166,13 @@ case "$cmd" in
   tail)
     touch "$LOG_FILE"
     tail -n 80 -f "$LOG_FILE"
+    ;;
+  attach)
+    if ! is_running; then
+      echo "$SESSION is not running" >&2
+      exit 1
+    fi
+    tmux attach -t "$SESSION"
     ;;
   *)
     usage
