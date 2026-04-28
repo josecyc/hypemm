@@ -17,7 +17,7 @@ from rich.table import Table
 from rich.text import Text
 
 from hypemm.config import StrategyConfig
-from hypemm.dashboard_loader import DashboardSnapshot
+from hypemm.dashboard_loader import BacktestBaseline, DashboardSnapshot
 from hypemm.math import compute_unrealized_pnl
 from hypemm.models import CompletedTrade, Direction, OpenPosition, Signal
 from hypemm.risk import RiskReport, RiskStatus
@@ -51,7 +51,7 @@ def build_dashboard(snapshot: DashboardSnapshot) -> Panel:
         parts.append(Text(""))
 
     if snapshot.completed_trades:
-        parts.append(_build_trades_table(snapshot.completed_trades))
+        parts.append(_build_trades_table(snapshot.completed_trades, max_rows=snapshot.trades_rows))
         parts.append(Text(""))
 
     parts.append(
@@ -64,6 +64,7 @@ def build_dashboard(snapshot: DashboardSnapshot) -> Panel:
             poll_interval_sec=snapshot.poll_interval_sec,
             n_bars=snapshot.n_bars,
             last_snapshot_iso=snapshot.last_snapshot_iso,
+            baseline=snapshot.baseline,
         )
     )
 
@@ -155,34 +156,65 @@ def _build_signals_table(
     return t
 
 
-def _build_trades_table(trades: list[CompletedTrade]) -> Table:
-    """Build the completed trades history table (last 10)."""
-    t = Table(title="Completed Trades", show_header=True, header_style="bold")
+def build_trades_log_table(
+    trades: list[CompletedTrade],
+    *,
+    max_rows: int | None = None,
+    title: str = "Completed Trades",
+    compact: bool = False,
+) -> Table:
+    """Render the completed-trades log with datetimes, z-scores, and corr.
+
+    Used both in the live dashboard (compact=True, capped via max_rows) and
+    in the `hypemm trades` subcommand (compact=False, uncapped, paged
+    through `less`).
+
+    compact: when True, render entry/exit as MM-DD HH:MM and drop the Hold
+    column to fit the live dashboard's narrow panel. The full form is
+    always available via `hypemm trades`.
+    """
+    t = Table(title=title, show_header=True, header_style="bold")
     t.add_column("Pair", width=12)
     t.add_column("Dir", justify="center", width=3)
-    t.add_column("Entry", justify="right", width=7)
-    t.add_column("Exit", justify="right", width=7)
-    t.add_column("Hold", justify="right", width=5)
-    t.add_column("Entry Z", justify="right", width=7)
+    if compact:
+        t.add_column("Entry", justify="left", width=11)
+        t.add_column("Exit", justify="left", width=11)
+    else:
+        t.add_column("Entry (UTC)", justify="left", width=16)
+        t.add_column("Exit (UTC)", justify="left", width=16)
+        t.add_column("Hold", justify="right", width=5)
+    t.add_column("Z in", justify="right", width=6)
+    t.add_column("Z out", justify="right", width=6)
+    t.add_column("Corr", justify="right", width=5)
     t.add_column("Net P&L", justify="right", width=10)
     t.add_column("Reason", width=12)
 
-    for tr in trades[-10:]:
+    fmt = "%m-%d %H:%M" if compact else "%Y-%m-%d %H:%M"
+    rows = trades[-max_rows:] if max_rows is not None else trades
+    for tr in rows:
         d = "L" if tr.direction == Direction.LONG_RATIO else "S"
         nc = "green" if tr.net_pnl > 0 else "red"
-        entry_hh = datetime.fromtimestamp(tr.entry_ts / 1000, tz=timezone.utc).strftime("%H:%M")
-        exit_hh = datetime.fromtimestamp(tr.exit_ts / 1000, tz=timezone.utc).strftime("%H:%M")
-        t.add_row(
-            tr.pair_label,
-            d,
-            entry_hh,
-            exit_hh,
-            f"{tr.hours_held}h",
-            f"{tr.entry_z:+.2f}",
-            f"[{nc}]${tr.net_pnl:+,.0f}[/{nc}]",
-            str(tr.exit_reason),
+        entry_dt = datetime.fromtimestamp(tr.entry_ts / 1000, tz=timezone.utc).strftime(fmt)
+        exit_dt = datetime.fromtimestamp(tr.exit_ts / 1000, tz=timezone.utc).strftime(fmt)
+        row = [tr.pair_label, d, entry_dt, exit_dt]
+        if not compact:
+            row.append(f"{tr.hours_held}h")
+        row.extend(
+            [
+                f"{tr.entry_z:+.2f}",
+                f"{tr.exit_z:+.2f}",
+                f"{tr.entry_correlation:.2f}",
+                f"[{nc}]${tr.net_pnl:+,.0f}[/{nc}]",
+                str(tr.exit_reason),
+            ]
         )
+        t.add_row(*row)
     return t
+
+
+def _build_trades_table(trades: list[CompletedTrade], *, max_rows: int = 15) -> Table:
+    """Compact trades table for the live dashboard panel."""
+    return build_trades_log_table(trades, max_rows=max_rows, compact=True)
 
 
 def _build_summary(
@@ -194,13 +226,15 @@ def _build_summary(
     poll_interval_sec: int,
     n_bars: int,
     last_snapshot_iso: str = "",
+    baseline: BacktestBaseline | None = None,
 ) -> Text:
     """Build summary statistics text — matches the legacy hype_mm dashboard layout."""
     total_realized = sum(tr.net_pnl for tr in trades)
     total_pnl = total_realized + total_unrealized
     n = len(trades)
     wins = sum(1 for tr in trades if tr.net_pnl > 0)
-    wr = f"{wins}/{n} ({wins / n * 100:.0f}%)" if n else "0/0"
+    live_wr_pct = (wins / n * 100.0) if n else 0.0
+    wr = f"{wins}/{n} ({live_wr_pct:.0f}%)" if n else "0/0"
 
     rc = "green" if total_realized >= 0 else "red"
     uc = "green" if total_unrealized >= 0 else "red"
@@ -243,14 +277,58 @@ def _build_summary(
         f"Daily rate: [{drc}]${daily_rate:+,.0f}/day[/{drc}]  "
         f"Projected annual: [{pac}]${projected_annual:+,.0f}[/{pac}]  "
         f"APR (5x): [{pac}]{apr_5x:+.0f}%[/{pac}]",
-        f"Notional/leg: ${config.notional_per_leg:,.0f}  "
-        f"Open: {open_positions}/{max_pairs} pairs  "
-        f"Exposure: ${exposure:,.0f} / ${max_exposure:,.0f}  "
-        f"Margin (5x): ${margin_5x:,.0f} / ${max_margin_5x:,.0f}",
-        f"[dim]Bars: {n_bars} │ {last_seen} │ "
-        f"Polling every {poll_interval_sec}s[/dim]",
     ]
+    if baseline is not None:
+        lines.extend(_baseline_lines(baseline, n, live_wr_pct, daily_rate))
+    lines.extend(
+        [
+            f"Notional/leg: ${config.notional_per_leg:,.0f}  "
+            f"Open: {open_positions}/{max_pairs} pairs  "
+            f"Exposure: ${exposure:,.0f} / ${max_exposure:,.0f}  "
+            f"Margin (5x): ${margin_5x:,.0f} / ${max_margin_5x:,.0f}",
+            f"[dim]Bars: {n_bars} │ {last_seen} │ " f"Polling every {poll_interval_sec}s[/dim]",
+        ]
+    )
     return Text.from_markup("\n".join(lines))
+
+
+def _baseline_lines(
+    baseline: BacktestBaseline,
+    live_trades: int,
+    live_wr_pct: float,
+    live_daily_rate: float,
+) -> list[str]:
+    """Render the backtest-baseline reference row plus a live-vs-baseline
+    delta when there's enough live data for the deltas to be meaningful.
+    """
+    ref = (
+        f"[cyan]Backtest baseline[/cyan] [dim]({baseline.date_range}, "
+        f"{baseline.n_days}d):[/dim]  "
+        f"WR [cyan]{baseline.win_rate_pct:.0f}%[/cyan]  "
+        f"Daily [cyan]${baseline.daily_net:+,.0f}/day[/cyan]  "
+        f"Trades/day [cyan]{baseline.trades_per_day:.1f}[/cyan]  "
+        f"Sharpe [cyan]{baseline.sharpe:.2f}[/cyan]  "
+        f"Max DD [cyan]${baseline.max_drawdown:,.0f}[/cyan]"
+    )
+    if live_trades < 10:
+        # Below ~10 trades the live numbers are too noisy for the delta to
+        # mean anything — show a hint instead so the user knows why.
+        return [
+            ref,
+            f"[dim]vs baseline:[/dim]  [dim]need ≥10 live trades for delta "
+            f"({live_trades} so far)[/dim]",
+        ]
+
+    wr_delta = live_wr_pct - baseline.win_rate_pct
+    daily_delta = live_daily_rate - baseline.daily_net
+    wrc = "green" if wr_delta >= 0 else "red"
+    drc = "green" if daily_delta >= 0 else "red"
+    return [
+        ref,
+        f"[dim]vs baseline:[/dim]  "
+        f"WR [{wrc}]{wr_delta:+.0f}pp[/{wrc}]  "
+        f"Daily [{drc}]${daily_delta:+,.0f}/day[/{drc}]",
+    ]
 
 
 def _total_unrealized(

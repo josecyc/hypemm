@@ -13,6 +13,7 @@ holding any in-memory connection to the runner. That decoupling means:
 from __future__ import annotations
 
 import csv
+import json
 import logging
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -24,6 +25,30 @@ from hypemm.persistence import load_state, load_trades
 from hypemm.risk import RiskReport, compute_risk_report
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class BacktestBaseline:
+    """Headline numbers from the backtest, surfaced on the dashboard so live
+    performance can be compared against the strategy's expected behavior
+    rather than only against absolute thresholds.
+    """
+
+    date_range: str
+    n_days: int
+    total_trades: int
+    win_rate_pct: float
+    total_net: float
+    sharpe: float
+    max_drawdown: float
+
+    @property
+    def daily_net(self) -> float:
+        return self.total_net / self.n_days if self.n_days > 0 else 0.0
+
+    @property
+    def trades_per_day(self) -> float:
+        return self.total_trades / self.n_days if self.n_days > 0 else 0.0
 
 
 @dataclass(frozen=True)
@@ -42,14 +67,21 @@ class DashboardSnapshot:
     risk_report: RiskReport | None = None
     poll_interval_sec: int = 60
     live_mode: bool = False
+    baseline: BacktestBaseline | None = None
+    trades_rows: int = 15
 
 
-def load_dashboard_snapshot(app: AppConfig, *, fresh: bool = False) -> DashboardSnapshot:
+def load_dashboard_snapshot(
+    app: AppConfig, *, fresh: bool = False, trades_rows: int = 15
+) -> DashboardSnapshot:
     """Reconstruct a DashboardSnapshot from disk.
 
     fresh=True: ignore paper_trades.csv and state.json — render an empty
     starting view as if the runner just launched. Useful for confirming
     a clean cutover after wiping data.
+
+    trades_rows controls how many recent trades the dashboard renders. The
+    full log is always available via `hypemm trades`.
     """
     paper_dir = app.infra.paper_trades_dir
     state_path = paper_dir / "state.json"
@@ -91,6 +123,8 @@ def load_dashboard_snapshot(app: AppConfig, *, fresh: bool = False) -> Dashboard
     )
     engine.halt_entries = risk_report.halts_entry
 
+    baseline = _load_backtest_baseline(app.infra.reports_dir / "backtest_summary.json")
+
     return DashboardSnapshot(
         config=app.strategy,
         risk_config=app.risk,
@@ -104,7 +138,34 @@ def load_dashboard_snapshot(app: AppConfig, *, fresh: bool = False) -> Dashboard
         risk_report=risk_report,
         poll_interval_sec=app.infra.poll_interval_sec,
         live_mode=live_mode,
+        baseline=baseline,
+        trades_rows=trades_rows,
     )
+
+
+def _load_backtest_baseline(path: Path) -> BacktestBaseline | None:
+    """Load the backtest baseline written by `hypemm backtest`.
+
+    Returns None if the report is missing or malformed — the dashboard then
+    simply omits the comparison row rather than showing stale or fake numbers.
+    """
+    if not path.exists():
+        return None
+    try:
+        with open(path) as f:
+            data = json.load(f)
+        return BacktestBaseline(
+            date_range=str(data["date_range"]),
+            n_days=int(data["n_days"]),
+            total_trades=int(data["total_trades"]),
+            win_rate_pct=float(data["win_rate"]),
+            total_net=float(data["total_net"]),
+            sharpe=float(data["sharpe"]),
+            max_drawdown=float(data["max_drawdown"]),
+        )
+    except (KeyError, ValueError, OSError, json.JSONDecodeError) as e:
+        logger.warning("backtest_summary.json unreadable, ignoring: %s", e)
+        return None
 
 
 def _load_latest_signals(
