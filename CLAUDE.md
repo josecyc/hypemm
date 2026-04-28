@@ -22,6 +22,18 @@ Hard rules in this repo:
 - Notebooks consume committed artifacts; they do not invent parallel data
   layouts.
 
+First-time setup (per clone):
+
+```bash
+uv sync
+uv run pre-commit install                       # black, ruff, mypy on commit
+uv run pre-commit install --hook-type pre-push  # pytest on push
+```
+
+CI runs the same checks on every push and PR — pre-commit just gives you
+fast local feedback. Don't bypass with `--no-verify`; fix the underlying
+issue.
+
 Before reporting a task done:
 
 - `uv run pytest` passes (this includes structural invariants in
