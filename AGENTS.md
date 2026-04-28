@@ -22,6 +22,16 @@ Hard rules in this repo:
 - Notebooks consume committed artifacts; they do not invent parallel data
   layouts.
 
+Before reporting a task done:
+
+- `uv run pytest` passes (this includes structural invariants in
+  `tests/test_repo_structure.py` and `tests/test_paired_configs.py`).
+- If you changed what's deployed on the server: update `docs/CURRENT_STATE.md`.
+- If you made a research claim: add a dated report under `docs/research/`
+  naming the config, commit hash, and output dir.
+- If you added a config: it loads cleanly, and if it's a live config, it has a
+  matching paper twin at `configs/paper/<stem>.toml`.
+
 ## 1. Think Before Coding
 
 **Don't assume. Don't hide confusion. Surface tradeoffs.**
