@@ -96,9 +96,69 @@ def _meta_payload() -> dict:
 
 def test_init_requires_private_key(monkeypatch):
     monkeypatch.delenv("HYPERLIQUID_PRIVATE_KEY", raising=False)
+    monkeypatch.delenv("HYPERLIQUID_KEYSTORE", raising=False)
     monkeypatch.delenv("HYPERLIQUID_ACCOUNT", raising=False)
-    with pytest.raises(Exception, match="HYPERLIQUID_PRIVATE_KEY"):
+    with pytest.raises(Exception, match="No signing key found"):
         LiveExecutionAdapter()
+
+
+def test_init_account_defaults_to_signer_address_when_unset(monkeypatch):
+    monkeypatch.delenv("HYPERLIQUID_ACCOUNT", raising=False)
+    a = LiveExecutionAdapter(
+        rest_url="https://api.hyperliquid-testnet.xyz",
+        private_key=VALID_KEY,
+    )
+    assert a._account_address == a._signer.address
+
+
+def test_init_loads_key_from_foundry_keystore(tmp_path, monkeypatch):
+    """Loading from a Foundry-style keystore matches the rpo-{nb} convention."""
+    from eth_account import Account
+
+    # Create an encrypted keystore at a tmp path with a known password.
+    pwd = "testpassword"
+    encrypted = Account.encrypt(VALID_KEY, pwd)
+    keystore_path = tmp_path / "rpo-test"
+    keystore_path.write_text(__import__("json").dumps(encrypted))
+
+    monkeypatch.delenv("HYPERLIQUID_PRIVATE_KEY", raising=False)
+    monkeypatch.delenv("HYPERLIQUID_ACCOUNT", raising=False)
+    monkeypatch.setenv("HYPERLIQUID_KEYSTORE", str(keystore_path))
+    monkeypatch.setenv("HYPERLIQUID_KEYSTORE_PWD", pwd)
+
+    a = LiveExecutionAdapter(rest_url="https://api.hyperliquid-testnet.xyz")
+    expected = Account.from_key(VALID_KEY).address
+    assert a._signer.address == expected
+    assert a._account_address == expected
+
+
+def test_init_keystore_falls_back_to_rpo_keystore_pwd(tmp_path, monkeypatch):
+    """RPO_KEYSTORE_PWD is honored when HYPERLIQUID_KEYSTORE_PWD is unset."""
+    from eth_account import Account
+
+    pwd = "rpopwd"
+    encrypted = Account.encrypt(VALID_KEY, pwd)
+    keystore_path = tmp_path / "rpo-test"
+    keystore_path.write_text(__import__("json").dumps(encrypted))
+
+    monkeypatch.delenv("HYPERLIQUID_PRIVATE_KEY", raising=False)
+    monkeypatch.delenv("HYPERLIQUID_KEYSTORE_PWD", raising=False)
+    monkeypatch.setenv("HYPERLIQUID_KEYSTORE", str(keystore_path))
+    monkeypatch.setenv("RPO_KEYSTORE_PWD", pwd)
+
+    a = LiveExecutionAdapter(rest_url="https://api.hyperliquid-testnet.xyz")
+    assert a._signer.address == Account.from_key(VALID_KEY).address
+
+
+def test_init_keystore_missing_password_raises(tmp_path, monkeypatch):
+    keystore_path = tmp_path / "rpo-test"
+    keystore_path.write_text("{}")  # not actually decrypted, error short-circuits
+    monkeypatch.delenv("HYPERLIQUID_PRIVATE_KEY", raising=False)
+    monkeypatch.delenv("HYPERLIQUID_KEYSTORE_PWD", raising=False)
+    monkeypatch.delenv("RPO_KEYSTORE_PWD", raising=False)
+    monkeypatch.setenv("HYPERLIQUID_KEYSTORE", str(keystore_path))
+    with pytest.raises(Exception, match="no password found"):
+        LiveExecutionAdapter(rest_url="https://api.hyperliquid-testnet.xyz")
 
 
 def test_init_detects_mainnet_vs_testnet():

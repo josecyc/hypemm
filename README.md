@@ -10,6 +10,95 @@ Trades mean-reversion of price ratios between correlated cryptocurrency perpetua
 uv sync
 ```
 
+## Server access
+
+The bot runs on a dedicated server reachable over Tailscale:
+
+```bash
+tailscale ssh dark-forest-guardian@100.91.78.8
+```
+
+All paper and live runs are managed inside a single tmux session named
+`hype_mm_opt` so panes can be observed side-by-side:
+
+```bash
+tmux attach -t hype_mm_opt
+```
+
+If the session does not yet exist, create it with:
+
+```bash
+tmux new -s hype_mm_opt
+```
+
+## Live trading
+
+Live mode places real orders against Hyperliquid mainnet. Auth is handled via
+a Foundry keystore (matching the `rpo-{nb}` convention used elsewhere in the
+broader stack); credentials live in a gitignored `.env` at the repo root.
+
+1. Copy `.env.example` to `.env` and fill in `HYPERLIQUID_KEYSTORE` (e.g.
+   `rpo-81`) and `RPO_KEYSTORE_PWD`. `.env` is loaded automatically by the CLI.
+2. Confirm the signer address matches the wallet you funded:
+
+   ```bash
+   uv run python -c "
+   from dotenv import load_dotenv; load_dotenv()
+   import json, os
+   from eth_account import Account
+   with open(os.path.expanduser('~/.foundry/keystores/' + os.environ['HYPERLIQUID_KEYSTORE'])) as f:
+       k = Account.decrypt(json.load(f), os.environ.get('HYPERLIQUID_KEYSTORE_PWD') or os.environ['RPO_KEYSTORE_PWD'])
+   print('signer:', Account.from_key(k).address)
+   "
+   ```
+
+3. Dry-run paper mode against the live config to validate wiring (no real
+   orders placed):
+
+   ```bash
+   uv run hypemm run --config configs/live_min.toml --once --fresh
+   ```
+
+4. From inside the `hype_mm_opt` tmux session, split a new pane and launch:
+
+   ```bash
+   # Inside tmux: Ctrl-b "  (horizontal split) or Ctrl-b %  (vertical split)
+   mkdir -p logs
+   uv run hypemm run --config configs/live_min.toml --live --confirm-live --fresh \
+     --log-file logs/live_min.log
+   ```
+
+   Or non-interactively from outside tmux:
+
+   ```bash
+   tmux split-window -t hype_mm_opt -v \
+     "mkdir -p logs && uv run hypemm run --config configs/live_min.toml --live --confirm-live --fresh --log-file logs/live_min.log"
+   ```
+
+5. Watch the live dashboard in another pane:
+
+   ```bash
+   uv run hypemm dashboard --config configs/live_min.toml
+   ```
+
+### Paper and live coexistence
+
+Paper and live runs are isolated by `data_dir` in their respective configs:
+
+- `configs/paper_optimized.toml` → `data/paper_optimized/`
+- `configs/live_min.toml`        → `data/live_min/`
+
+Each runner writes its own `state.json`, `paper_trades.csv`, and snapshot
+files. Dashboards always read from the `data_dir` of the config passed via
+`--config`, so a paper dashboard can never accidentally show live trades and
+vice versa. The two runners can safely poll Hyperliquid in parallel — both
+respect `infra.rate_limit_sec` independently and mainnet has ample headroom
+for two 60-second pollers.
+
+`live_min.toml` is sized for the HL minimum: $25/leg × 8 legs at 5x leverage
+→ $40 USDC max margin. Risk kill-switches are scaled to match (`-$3` daily
+loss halt, `-$8` unrealized halt) so they actually fire at this size.
+
 ## Usage
 
 ```bash

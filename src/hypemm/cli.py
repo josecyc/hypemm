@@ -515,7 +515,9 @@ def cmd_dashboard(args: argparse.Namespace) -> None:
     console = Console(force_terminal=True)
 
     if args.once:
-        snapshot = load_dashboard_snapshot(app, fresh=args.fresh)
+        snapshot = load_dashboard_snapshot(
+            app, fresh=args.fresh, trades_rows=args.trades_rows
+        )
         console.print(build_dashboard(snapshot))
         return
 
@@ -534,11 +536,57 @@ def cmd_dashboard(args: argparse.Namespace) -> None:
     ) as live:
         while True:
             try:
-                snapshot = load_dashboard_snapshot(app, fresh=args.fresh)
+                snapshot = load_dashboard_snapshot(
+                    app, fresh=args.fresh, trades_rows=args.trades_rows
+                )
                 live.update(build_dashboard(snapshot), refresh=True)
             except Exception as e:
                 logging.warning("dashboard refresh skipped: %s", e)
             time.sleep(args.refresh)
+
+
+def cmd_trades(args: argparse.Namespace) -> None:
+    """Print the full completed-trades log with full datetimes, z-scores, and corr.
+
+    The dashboard's live panel only shows the most recent N trades (alt-screen
+    Live can't scroll). This command renders the full history into Rich's
+    pager so you can scroll with `less` keybindings, or pipe elsewhere with
+    --no-pager.
+    """
+    from rich.console import Console
+
+    from hypemm.dashboard import build_trades_log_table
+    from hypemm.persistence import load_trades
+
+    app = load_config(Path(args.config))
+    trades_path = app.infra.paper_trades_dir / "paper_trades.csv"
+    trades = load_trades(trades_path)
+
+    if not trades:
+        print(f"No trades found at {trades_path}")
+        return
+
+    n = len(trades)
+    title = (
+        f"Completed Trades (last {args.tail} of {n})"
+        if args.tail > 0
+        else f"Completed Trades ({n} total)"
+    )
+    table = build_trades_log_table(
+        trades,
+        max_rows=args.tail if args.tail > 0 else None,
+        title=title,
+    )
+
+    # Force a wide console so the date/z/corr columns render in full. The
+    # pager (`less -RS`, Rich's default) lets users scroll horizontally;
+    # piping to other tools also benefits from full-width rows.
+    console = Console(width=140)
+    if args.no_pager:
+        console.print(table)
+    else:
+        with console.pager(styles=True):
+            console.print(table)
 
 
 def cmd_run(args: argparse.Namespace) -> None:
@@ -586,10 +634,17 @@ def cmd_run(args: argparse.Namespace) -> None:
                 "live trading must be confirmed with --confirm-live "
                 "(this will place real orders against the configured account)"
             )
+        notional = app.strategy.notional_per_leg
+        n_legs = len(app.strategy.pairs) * 2
+        max_margin = notional * n_legs / app.infra.leverage
         logging.warning(
             "LIVE MODE — orders will hit real Hyperliquid markets for the "
-            "account in HYPERLIQUID_ACCOUNT. Capital recommended: $120K at 5x. "
-            "See docs/LIVE_DEPLOYMENT.md."
+            "account in HYPERLIQUID_ACCOUNT. Sizing: $%.0f/leg × %d legs at %dx "
+            "leverage → $%.0f max margin. See docs/LIVE_DEPLOYMENT.md.",
+            notional,
+            n_legs,
+            app.infra.leverage,
+            max_margin,
         )
 
     adapter = build_adapter(
@@ -613,6 +668,11 @@ def cmd_run(args: argparse.Namespace) -> None:
 
 def main() -> None:
     """Main CLI entry point."""
+    # Load .env from repo root so HYPERLIQUID_* and RPO_KEYSTORE_PWD don't have
+    # to be re-exported every shell session. .env is gitignored.
+    from dotenv import load_dotenv
+
+    load_dotenv()
     _setup_logging()
 
     parser = argparse.ArgumentParser(
@@ -680,7 +740,29 @@ def main() -> None:
         "--once", action="store_true",
         help="Render once and exit (no Live loop) — useful for snapshots/CI",
     )
+    dash_p.add_argument(
+        "--trades-rows", type=int, default=15,
+        help=(
+            "How many recent completed trades to show in the live panel "
+            "(default: 15). The full log is always available via `hypemm trades`."
+        ),
+    )
     dash_p.set_defaults(func=cmd_dashboard)
+
+    trades_p = sub.add_parser(
+        "trades",
+        help="Print the full completed-trades log (paged, scrollable)",
+    )
+    trades_p.add_argument("--config", default="config.toml", help="Config file path")
+    trades_p.add_argument(
+        "--tail", type=int, default=0,
+        help="Show only the last N trades (0 = full log, default)",
+    )
+    trades_p.add_argument(
+        "--no-pager", action="store_true",
+        help="Disable the pager (just print to stdout)",
+    )
+    trades_p.set_defaults(func=cmd_trades)
 
     run_p = sub.add_parser("run", help="Start paper or live trading")
     run_p.add_argument("--fresh", action="store_true", help="Ignore saved state")

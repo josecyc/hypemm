@@ -10,6 +10,7 @@ dependencies = [
     "numpy>=1.26.0",
     "msgpack>=1.1.2",
     "eth-account>=0.13.7",
+    "python-dotenv>=1.2.2",
 ]
 
 [project.scripts]

@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import time
+from pathlib import Path
 from typing import Any, Protocol
 
 import httpx
@@ -15,6 +17,54 @@ from hypemm.models import ConfigurationError, DataFetchError, Direction, HypeMME
 from hypemm.orderbook import book_vwap
 
 logger = logging.getLogger(__name__)
+
+
+def _load_key_from_keystore(spec: str, password: str) -> str:
+    """Decrypt a Foundry-style keystore and return the hex private key.
+
+    spec may be a short name like "rpo-81" (expanded to
+    ~/.foundry/keystores/rpo-81) or an absolute path. Matches the convention
+    used elsewhere in this codebase's broader stack.
+    """
+    from eth_account import Account
+
+    path = Path(spec).expanduser()
+    if not path.is_absolute() and not path.exists():
+        path = Path("~/.foundry/keystores").expanduser() / spec
+    if not path.exists():
+        raise ConfigurationError(f"keystore not found: {path}")
+    with open(path) as f:
+        priv_bytes = Account.decrypt(json.load(f), password)
+    return priv_bytes.hex() if isinstance(priv_bytes, bytes) else str(priv_bytes)
+
+
+def _resolve_private_key(explicit: str | None) -> str:
+    """Resolve the signing key from explicit arg, env, or Foundry keystore.
+
+    Priority:
+      1. explicit `private_key` argument
+      2. HYPERLIQUID_PRIVATE_KEY env (raw hex)
+      3. HYPERLIQUID_KEYSTORE env (path or rpo-name) +
+         HYPERLIQUID_KEYSTORE_PWD (or RPO_KEYSTORE_PWD as fallback)
+    """
+    if explicit:
+        return explicit
+    raw = os.environ.get("HYPERLIQUID_PRIVATE_KEY")
+    if raw:
+        return raw
+    keystore = os.environ.get("HYPERLIQUID_KEYSTORE")
+    if not keystore:
+        raise ConfigurationError(
+            "No signing key found. Set HYPERLIQUID_PRIVATE_KEY (hex), or "
+            "HYPERLIQUID_KEYSTORE (path or rpo-name) + HYPERLIQUID_KEYSTORE_PWD."
+        )
+    pwd = os.environ.get("HYPERLIQUID_KEYSTORE_PWD") or os.environ.get("RPO_KEYSTORE_PWD")
+    if not pwd:
+        raise ConfigurationError(
+            "HYPERLIQUID_KEYSTORE is set but no password found. Set "
+            "HYPERLIQUID_KEYSTORE_PWD or RPO_KEYSTORE_PWD."
+        )
+    return _load_key_from_keystore(keystore, pwd)
 
 
 class ExecutionError(HypeMMError):
@@ -114,9 +164,17 @@ class LiveExecutionAdapter:
     VWAP per leg. Refuses to fill if the realized VWAP differs from the signal
     mid by more than max_slippage_bps.
 
-    Required environment:
-        HYPERLIQUID_PRIVATE_KEY  — API wallet private key (hex, 0x-prefixed)
-        HYPERLIQUID_ACCOUNT      — main account address (0x-prefixed)
+    Required environment (one of these signing-key sources):
+        HYPERLIQUID_PRIVATE_KEY  — raw hex private key (0x-prefixed), OR
+        HYPERLIQUID_KEYSTORE     — Foundry keystore path or short name
+                                   (e.g. "rpo-81" → ~/.foundry/keystores/rpo-81)
+        HYPERLIQUID_KEYSTORE_PWD — password for the keystore (or RPO_KEYSTORE_PWD)
+
+    Optional:
+        HYPERLIQUID_ACCOUNT      — main account address (0x-prefixed). If unset,
+                                   defaults to the signer's address (i.e. the
+                                   keystore is the trading account itself rather
+                                   than an API wallet for a separate vault).
         HYPERLIQUID_API_URL      — base URL, default mainnet; testnet =
                                    https://api.hyperliquid-testnet.xyz
     """
@@ -144,19 +202,16 @@ class LiveExecutionAdapter:
         url = rest_url or os.environ.get("HYPERLIQUID_API_URL") or self.MAINNET_URL
         self.rest_url = url.rstrip("/")
         self.is_mainnet = self.MAINNET_URL in self.rest_url
-        self._private_key = private_key or os.environ.get("HYPERLIQUID_PRIVATE_KEY")
-        self._account_address = account_address or os.environ.get("HYPERLIQUID_ACCOUNT")
-        if not self._private_key:
-            raise ConfigurationError(
-                "HYPERLIQUID_PRIVATE_KEY is required for live trading. "
-                "Set it in the environment or pass private_key explicitly."
-            )
-        if not self._account_address:
-            raise ConfigurationError(
-                "HYPERLIQUID_ACCOUNT is required for live trading. "
-                "Set it in the environment or pass account_address explicitly."
-            )
+        self._private_key = _resolve_private_key(private_key)
         self._signer = Account.from_key(self._private_key)
+        # If HYPERLIQUID_ACCOUNT is unset, assume the keystore is the trading
+        # account itself (no separate API wallet / vault). This matches the
+        # rpo-{nb} convention where the keystore IS the account.
+        self._account_address = (
+            account_address
+            or os.environ.get("HYPERLIQUID_ACCOUNT")
+            or self._signer.address
+        )
         self.leverage = leverage
         self.is_cross_margin = is_cross_margin
         self.max_slippage_bps = max_slippage_bps

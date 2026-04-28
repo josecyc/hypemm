@@ -1,0 +1,88 @@
+# Minimum-stake live config for the walk-forward optimized 4-pair strategy.
+# Same strategy parameters as paper_optimized.toml, but sized to the smallest
+# orders Hyperliquid will accept so we can validate the live execution path
+# with minimal capital at risk.
+#
+# Sizing:
+#   notional_per_leg = 25  → $25 position per leg
+#   leverage = 5            → $5 USDC margin per leg
+#   4 pairs × 2 legs = 8 legs max → $40 USDC margin at full deployment
+#   ($200 total notional). Wallet only needs ~$50-80 USDC including buffer.
+#
+# HL minimum is $10/leg notional after size-decimals rounding. $25/leg gives
+# us a 2.5x buffer so rounding never knocks us below.
+#
+# Risk thresholds are scaled down ~2000x from paper_optimized.toml ($50K → $25)
+# so the kill switches actually trigger at this size.
+
+[strategy]
+lookback_hours = 48
+entry_z = 2.5
+exit_z = 0.5
+max_hold_hours = 36
+stop_loss_z = 4.0
+notional_per_leg = 25
+cost_per_side_bps = 2.0
+cooldown_hours = 2
+corr_window_hours = 168
+corr_threshold = 0.7
+progress_exit_hours = 12
+progress_exit_pct = 0.10
+
+[[strategy.pairs]]
+coin_a = "LINK"
+coin_b = "SOL"
+
+[[strategy.pairs]]
+coin_a = "DOGE"
+coin_b = "AVAX"
+
+[[strategy.pairs]]
+coin_a = "SOL"
+coin_b = "AVAX"
+
+[[strategy.pairs]]
+coin_a = "DOGE"
+coin_b = "ADA"
+
+[infra]
+rest_url = "https://api.hyperliquid.xyz/info"
+rate_limit_sec = 0.7
+poll_interval_sec = 60
+data_dir = "data/live_min"
+leverage = 5
+is_cross_margin = true
+# Mainnet books are deep enough that $25 orders fill at top-of-book; 5 bps is
+# the same prod default but explicit here so we can tune without a code change.
+max_slippage_bps = 5.0
+ioc_aggression_bps = 10.0
+fill_poll_seconds = 0.5
+fill_timeout_seconds = 30.0
+
+[gates]
+min_sharpe = 1.0
+min_high_corr_pct = 65
+max_breakdown_hours = 336
+min_easy_pairs = 3
+depth_bps_levels = [2, 5, 10, 25, 50]
+ob_snapshot_interval_sec = 300
+ob_collection_duration_sec = 7200
+
+[sweep]
+lookbacks = [24, 48, 72]
+entry_zs = [1.5, 2.0, 2.5]
+
+# Scaled-down kill switches for $25/leg (vs $50K/leg in paper_optimized.toml).
+# At this size a -10% adverse move on a single leg is -$2.50, so thresholds
+# are denominated in single-digit dollars.
+[risk]
+unrealized_warn = -5.0
+unrealized_halt = -8.0
+daily_loss_halt = -3.0
+win_rate_window = 30
+win_rate_warn = 0.55
+win_rate_min_trades = 10
+time_stop_window = 20
+time_stop_warn_pct = 0.30
+time_stop_min_trades = 10
+corr_warn_threshold = 0.65
