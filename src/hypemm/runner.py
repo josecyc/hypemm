@@ -196,13 +196,8 @@ def _run_loop(
             _accrue_funding(engine, adapter, config.all_coins, config.notional_per_leg)
             orders = engine.process_bar(signals, now_ms)
             for order in orders:
-                # Per-order isolation: an exchange rejection on one pair (e.g.
-                # tick-size, depth, leverage) must NOT kill the runner — other
-                # pairs still need their orders processed and the loop must
-                # keep ticking. We log loudly and the engine simply doesn't
-                # see a confirmation, leaving the position state unchanged.
-                # An open ExitOrder that fails is the worst case: position
-                # stays open another hour and is retried on the next bar.
+                # A failed ExitOrder leaves the position open one more bar
+                # and is re-attempted on the next hour boundary.
                 try:
                     if isinstance(order, EntryOrder):
                         fa, fb = adapter.get_fill_prices(
@@ -226,15 +221,9 @@ def _run_loop(
                         log_trade(trade, trades_path)
                         completed_trades.append(trade)
                 except ExecutionError as e:
-                    pair_label = (
-                        order.pair.label
-                        if isinstance(order, EntryOrder)
-                        else order.position.pair.label
-                    )
                     logger.error(
-                        "Order failed for %s (%s) — skipping this bar, runner continues: %s",
-                        pair_label,
-                        type(order).__name__,
+                        "Order failed for %s — skipping, runner continues: %s",
+                        order.pair.label,
                         e,
                     )
 

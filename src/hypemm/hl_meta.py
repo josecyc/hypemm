@@ -73,13 +73,6 @@ def round_price(price: float, sz_decimals: int) -> float:
     Two constraints, both must hold:
       1. At most PERP_MAX_DECIMALS - sz_decimals decimal places
       2. At most PERP_MAX_SIGFIGS significant figures
-
-    The sig-fig constraint applies regardless of whether price is above or
-    below 1. A prior version skipped it for sub-1 prices, which produced
-    valid orders for prices like $0.099 (5 sig figs at 6 decimals) but
-    invalid orders once DOGE crossed $0.10 — round(0.100065, 6) = 0.100065
-    has 6 sig figs and HL rejects it as "Price must be divisible by tick
-    size."
     """
     from math import floor, log10
 
