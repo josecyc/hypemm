@@ -39,4 +39,4 @@ Preserved on disk but not relaunched.
 - `data/runs/testnet/optimized_3pair/` — testnet smoke-test artifacts; no
   active runner.
 
-Last deployed commit, server-side: TBD after server migration.
+Last deployed commit, server-side: `41315fb` (verified 2026-04-28).
