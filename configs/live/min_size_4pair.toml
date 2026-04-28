@@ -1,6 +1,6 @@
-# Minimum-stake live config for the walk-forward optimized 4-pair strategy.
-# Same strategy parameters as paper_optimized.toml, but sized to the smallest
-# orders Hyperliquid will accept so we can validate the live execution path
+# Mainnet live, minimum-stake sizing.
+# Same strategy params as configs/paper/optimized_4pair.toml but at the smallest
+# notional Hyperliquid will accept, so we can validate the live execution path
 # with minimal capital at risk.
 #
 # Sizing:
@@ -12,8 +12,8 @@
 # HL minimum is $10/leg notional after size-decimals rounding. $25/leg gives
 # us a 2.5x buffer so rounding never knocks us below.
 #
-# Risk thresholds are scaled down ~2000x from paper_optimized.toml ($50K → $25)
-# so the kill switches actually trigger at this size.
+# Risk thresholds are scaled down ~2000x from paper sizing ($50K → $25) so the
+# kill switches actually trigger at this size.
 
 [strategy]
 lookback_hours = 48
@@ -49,7 +49,6 @@ coin_b = "ADA"
 rest_url = "https://api.hyperliquid.xyz/info"
 rate_limit_sec = 0.7
 poll_interval_sec = 60
-data_dir = "data/live_min"
 leverage = 5
 is_cross_margin = true
 # Mainnet books are deep enough that $25 orders fill at top-of-book; 5 bps is
@@ -72,9 +71,8 @@ ob_collection_duration_sec = 7200
 lookbacks = [24, 48, 72]
 entry_zs = [1.5, 2.0, 2.5]
 
-# Scaled-down kill switches for $25/leg (vs $50K/leg in paper_optimized.toml).
-# At this size a -10% adverse move on a single leg is -$2.50, so thresholds
-# are denominated in single-digit dollars.
+# Scaled-down kill switches for $25/leg. At this size a -10% adverse move on a
+# single leg is -$2.50, so thresholds are denominated in single-digit dollars.
 [risk]
 unrealized_warn = -5.0
 unrealized_halt = -8.0

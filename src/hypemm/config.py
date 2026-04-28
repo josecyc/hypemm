@@ -74,7 +74,15 @@ class StrategyConfig:
 
 @dataclass(frozen=True)
 class InfraConfig:
-    """Infrastructure / deployment configuration."""
+    """Infrastructure / deployment configuration.
+
+    market_dir is read-only input data (candles + funding). Set in TOML.
+
+    run_dir is per-instance output (state, trades, reports). NOT set in TOML —
+    derived from the config path by load_config so it cannot drift from the
+    config that produced it. Convention: configs/<mode>/<stem>.toml maps to
+    data/runs/<mode>/<stem>/.
+    """
 
     rest_url: str = "https://api.hyperliquid.xyz/info"
     market_data_provider: str = "hyperliquid"
@@ -82,7 +90,8 @@ class InfraConfig:
     binance_futures_url: str = "https://fapi.binance.com"
     rate_limit_sec: float = 0.7
     poll_interval_sec: int = 60
-    data_dir: Path = field(default_factory=lambda: Path("data"))
+    market_dir: Path = field(default_factory=lambda: Path("data/market/hyperliquid"))
+    run_dir: Path = field(default_factory=lambda: Path("data/runs/_unset"))
     # Live trading
     leverage: int = 5
     is_cross_margin: bool = True
@@ -93,23 +102,23 @@ class InfraConfig:
 
     @property
     def candles_dir(self) -> Path:
-        return self.data_dir / "candles"
+        return self.market_dir / "candles"
 
     @property
     def funding_dir(self) -> Path:
-        return self.data_dir / "funding"
+        return self.market_dir / "funding"
 
     @property
     def reports_dir(self) -> Path:
-        return self.data_dir / "reports"
+        return self.run_dir
 
     @property
     def paper_trades_dir(self) -> Path:
-        return self.data_dir / "paper_trades"
+        return self.run_dir
 
     @property
     def snapshots_dir(self) -> Path:
-        return self.data_dir / "orderbook_snapshots"
+        return self.run_dir / "orderbook_snapshots"
 
 
 @dataclass(frozen=True)
@@ -173,8 +182,39 @@ class AppConfig:
     risk: RiskConfig
 
 
+def derive_run_dir(config_path: Path) -> Path:
+    """Derive the run output directory from a config path.
+
+    configs/<mode>/<stem>.toml -> data/runs/<mode>/<stem>/
+
+    The mapping is mechanical so a config file and its outputs can never
+    drift apart. Raises ValueError if config_path does not match the layout.
+    """
+    parts = config_path.resolve().parts
+    try:
+        idx = len(parts) - 1 - parts[::-1].index("configs")
+    except ValueError as e:
+        raise ValueError(
+            f"config path {config_path} is not under a 'configs/' directory; "
+            "expected configs/<mode>/<name>.toml"
+        ) from e
+    rel = parts[idx + 1 :]
+    if len(rel) != 2 or not rel[1].endswith(".toml"):
+        raise ValueError(
+            f"config path {config_path} must be configs/<mode>/<name>.toml "
+            f"(got configs/{'/'.join(rel)})"
+        )
+    mode, fname = rel
+    stem = fname[: -len(".toml")]
+    return Path("data") / "runs" / mode / stem
+
+
 def load_config(path: Path) -> AppConfig:
-    """Load application config from a TOML file."""
+    """Load application config from a TOML file.
+
+    The output directory (`run_dir`) is derived from `path` and injected into
+    InfraConfig — it cannot be set in the TOML. See `derive_run_dir`.
+    """
     with open(path, "rb") as f:
         raw = tomllib.load(f)
 
@@ -185,7 +225,19 @@ def load_config(path: Path) -> AppConfig:
 
     infra_raw = dict(raw.get("infra", {}))
     if "data_dir" in infra_raw:
-        infra_raw["data_dir"] = Path(infra_raw["data_dir"])
+        raise ValueError(
+            f"{path}: 'data_dir' is no longer a config field — output paths are "
+            "derived from the config file location. Remove it; use 'market_dir' "
+            "if the input dataset path needs to be customized."
+        )
+    if "run_dir" in infra_raw:
+        raise ValueError(
+            f"{path}: 'run_dir' must not be set in TOML — it is derived from "
+            "the config path."
+        )
+    if "market_dir" in infra_raw:
+        infra_raw["market_dir"] = Path(infra_raw["market_dir"])
+    infra_raw["run_dir"] = derive_run_dir(path)
     infra = InfraConfig(**infra_raw)
 
     gates_raw = dict(raw.get("gates", {}))

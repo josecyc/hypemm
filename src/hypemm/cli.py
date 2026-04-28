@@ -150,7 +150,7 @@ def cmd_backtest(args: argparse.Namespace) -> None:
 
     # Auto-load slippage profile if it exists from `hypemm snapshot-slippage`
     profile = load_slippage_profile(
-        app.infra.data_dir / "slippage_profile.json",
+        app.infra.run_dir / "slippage_profile.json",
         percentile=args.slippage_percentile,
     )
     if profile:
@@ -421,8 +421,8 @@ def cmd_snapshot_slippage(args: argparse.Namespace) -> None:
     Polls the L2 book for each coin once per `--interval` seconds for
     `--duration` minutes, walks the book at the configured notional in both
     directions, and saves the per-pair median + p90 slippage in bps to
-    data/slippage_profile.json. The backtest reads this file (when present)
-    to apply realistic per-pair spread-crossing costs.
+    {run_dir}/slippage_profile.json. The backtest reads this file (when
+    present) to apply realistic per-pair spread-crossing costs.
     """
     import statistics
     import time
@@ -481,7 +481,7 @@ def cmd_snapshot_slippage(args: argparse.Namespace) -> None:
         "duration_seconds": duration,
         "pairs": profile,
     }
-    out_path = app.infra.data_dir / "slippage_profile.json"
+    out_path = app.infra.run_dir / "slippage_profile.json"
     out_path.parent.mkdir(parents=True, exist_ok=True)
     _write_report(out_path, out)
     logging.info("Saved slippage profile to %s", out_path)
@@ -683,12 +683,12 @@ def main() -> None:
 
     fetch_p = sub.add_parser("fetch", help="Fetch candle data")
     fetch_p.add_argument("--force", action="store_true", help="Re-fetch even if up-to-date")
-    fetch_p.add_argument("--config", default="config.toml", help="Config file path")
+    fetch_p.add_argument("--config", required=True, help="Config file path")
     fetch_p.set_defaults(func=cmd_fetch)
 
     bt_p = sub.add_parser("backtest", help="Run backtest")
     bt_p.add_argument("--sweep", action="store_true", help="Run parameter sweep")
-    bt_p.add_argument("--config", default="config.toml", help="Config file path")
+    bt_p.add_argument("--config", required=True, help="Config file path")
     bt_p.add_argument(
         "--slippage-percentile",
         choices=["median_bps", "p90_bps", "max_bps"],
@@ -698,11 +698,11 @@ def main() -> None:
     bt_p.set_defaults(func=cmd_backtest)
 
     val_p = sub.add_parser("validate", help="Run validation gates")
-    val_p.add_argument("--config", default="config.toml", help="Config file path")
+    val_p.add_argument("--config", required=True, help="Config file path")
     val_p.set_defaults(func=cmd_validate)
 
     wf_p = sub.add_parser("walkforward", help="Run walk-forward validation")
-    wf_p.add_argument("--config", default="config_binance_6y.toml", help="Config file path")
+    wf_p.add_argument("--config", required=True, help="Config file path")
     wf_p.add_argument("--train-years", type=int, default=2, help="Initial training window (years)")
     wf_p.add_argument("--test-months", type=int, default=12, help="Test window (months)")
     wf_p.add_argument("--step-months", type=int, default=12, help="Step between folds (months)")
@@ -712,7 +712,7 @@ def main() -> None:
         "snapshot-slippage",
         help="Sample HL L2 books to build a per-pair slippage profile",
     )
-    snap_p.add_argument("--config", default="config.toml", help="Config file path")
+    snap_p.add_argument("--config", required=True, help="Config file path")
     snap_p.add_argument(
         "--duration", type=int, default=10,
         help="Total polling duration in minutes (default: 10)",
@@ -727,7 +727,7 @@ def main() -> None:
         "dashboard",
         help="Render the dashboard from on-disk runner artifacts (decoupled from runner)",
     )
-    dash_p.add_argument("--config", default="config.toml", help="Config file path")
+    dash_p.add_argument("--config", required=True, help="Config file path")
     dash_p.add_argument(
         "--refresh", type=float, default=5.0,
         help="Seconds between dashboard refreshes (default: 5)",
@@ -753,7 +753,7 @@ def main() -> None:
         "trades",
         help="Print the full completed-trades log (paged, scrollable)",
     )
-    trades_p.add_argument("--config", default="config.toml", help="Config file path")
+    trades_p.add_argument("--config", required=True, help="Config file path")
     trades_p.add_argument(
         "--tail", type=int, default=0,
         help="Show only the last N trades (0 = full log, default)",
@@ -766,7 +766,7 @@ def main() -> None:
 
     run_p = sub.add_parser("run", help="Start paper or live trading")
     run_p.add_argument("--fresh", action="store_true", help="Ignore saved state")
-    run_p.add_argument("--config", default="config.toml", help="Config file path")
+    run_p.add_argument("--config", required=True, help="Config file path")
     run_p.add_argument(
         "--live",
         action="store_true",

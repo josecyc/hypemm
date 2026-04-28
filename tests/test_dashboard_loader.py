@@ -31,7 +31,7 @@ def app(tmp_path: Path) -> AppConfig:
         strategy=StrategyConfig(
             pairs=(PairConfig("LINK", "SOL"), PairConfig("DOGE", "AVAX")),
         ),
-        infra=InfraConfig(data_dir=tmp_path),
+        infra=InfraConfig(run_dir=tmp_path),
         gates=GateConfig(),
         sweep=SweepConfig(),
         risk=RiskConfig(),

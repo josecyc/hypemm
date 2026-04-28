@@ -1,0 +1,63 @@
+# Paper trading: walk-forward optimized 4-pair strategy.
+# Strategy params shared with configs/live/min_size_4pair.toml; only sizing
+# and risk thresholds differ.
+
+[strategy]
+lookback_hours = 48
+entry_z = 2.5
+exit_z = 0.5
+max_hold_hours = 36
+stop_loss_z = 4.0
+notional_per_leg = 50_000
+cost_per_side_bps = 2.0
+cooldown_hours = 2
+corr_window_hours = 168
+corr_threshold = 0.7
+progress_exit_hours = 12
+progress_exit_pct = 0.10
+
+[[strategy.pairs]]
+coin_a = "LINK"
+coin_b = "SOL"
+
+[[strategy.pairs]]
+coin_a = "DOGE"
+coin_b = "AVAX"
+
+[[strategy.pairs]]
+coin_a = "SOL"
+coin_b = "AVAX"
+
+[[strategy.pairs]]
+coin_a = "DOGE"
+coin_b = "ADA"
+
+[infra]
+rest_url = "https://api.hyperliquid.xyz/info"
+rate_limit_sec = 0.7
+poll_interval_sec = 60
+
+[gates]
+min_sharpe = 1.0
+min_high_corr_pct = 65
+max_breakdown_hours = 336
+min_easy_pairs = 3
+depth_bps_levels = [2, 5, 10, 25, 50]
+ob_snapshot_interval_sec = 300
+ob_collection_duration_sec = 7200
+
+[sweep]
+lookbacks = [24, 48, 72]
+entry_zs = [1.5, 2.0, 2.5]
+
+[risk]
+unrealized_warn = -10_000.0
+unrealized_halt = -15_000.0
+daily_loss_halt = -5_000.0
+win_rate_window = 30
+win_rate_warn = 0.55
+win_rate_min_trades = 10
+time_stop_window = 20
+time_stop_warn_pct = 0.30
+time_stop_min_trades = 10
+corr_warn_threshold = 0.65

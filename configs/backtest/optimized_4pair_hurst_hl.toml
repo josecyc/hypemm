@@ -1,6 +1,6 @@
-# Paper-trading config for the original 3-pair book plus DOGE/ADA.
-# Uses an isolated data_dir so it does not share paper state, logs, or reports
-# with the default HYPE strategy instance.
+# Walk-forward optimized 4-pair + Hurst gate, Hyperliquid native data.
+# Same as optimized_4pair_hl.toml but halts a pair when Hurst > 0.55 (trending).
+# OOS (Binance 6y): SR 2.24, $270K net, $45K max DD, DSR 81%.
 
 [strategy]
 lookback_hours = 48
@@ -13,6 +13,8 @@ cost_per_side_bps = 2.0
 cooldown_hours = 2
 corr_window_hours = 168
 corr_threshold = 0.7
+hurst_window_hours = 168
+hurst_threshold = 0.55
 progress_exit_hours = 12
 progress_exit_pct = 0.10
 
@@ -36,7 +38,7 @@ coin_b = "ADA"
 rest_url = "https://api.hyperliquid.xyz/info"
 rate_limit_sec = 0.7
 poll_interval_sec = 60
-data_dir = "data/paper_original_3_ada"
+market_dir = "data/market/hyperliquid"
 
 [gates]
 min_sharpe = 1.0
@@ -50,15 +52,3 @@ ob_collection_duration_sec = 7200
 [sweep]
 lookbacks = [24, 48, 72]
 entry_zs = [1.5, 2.0, 2.5]
-
-[risk]
-unrealized_warn = -10_000.0
-unrealized_halt = -15_000.0
-daily_loss_halt = -5_000.0
-win_rate_window = 30
-win_rate_warn = 0.55
-win_rate_min_trades = 10
-time_stop_window = 20
-time_stop_warn_pct = 0.30
-time_stop_min_trades = 10
-corr_warn_threshold = 0.65

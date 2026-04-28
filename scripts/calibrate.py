@@ -11,10 +11,10 @@ strategy config.
 
 Usage:
     uv run python scripts/calibrate.py \\
-        --live data/paper_trades/paper_trades.csv \\
-        --candles /tmp/hl_fresh/candles \\
-        --funding /tmp/hl_fresh/funding \\
-        --config configs/original.toml
+        --live data/runs/paper/optimized_4pair/paper_trades.csv \\
+        --candles data/market/hyperliquid/candles \\
+        --funding data/market/hyperliquid/funding \\
+        --config configs/backtest/original_4pair_hl.toml
 """
 
 from __future__ import annotations
@@ -38,7 +38,7 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument("--live", required=True, help="paper_trades.csv path")
     p.add_argument("--candles", required=True, help="candles dir for backtest")
     p.add_argument("--funding", required=True, help="funding dir for backtest")
-    p.add_argument("--config", default="configs/original.toml")
+    p.add_argument("--config", required=True)
     p.add_argument(
         "--match-tolerance-hours",
         type=int,

@@ -1,5 +1,6 @@
-# Original strategy — 4 pairs, entry 2.0, max hold 48h
-# Paper traded Apr 6-18, 2026. 26 trades, $10,419, 81% WR.
+# Original 4-pair strategy, Hyperliquid native data.
+# Pairs: LINK/SOL, DOGE/AVAX, SOL/AVAX, BTC/SOL.
+# Paper-traded Apr 6-18, 2026: 26 trades, $10,419, 81% WR.
 
 [strategy]
 lookback_hours = 48
@@ -33,7 +34,7 @@ coin_b = "SOL"
 rest_url = "https://api.hyperliquid.xyz/info"
 rate_limit_sec = 0.7
 poll_interval_sec = 60
-data_dir = "data"
+market_dir = "data/market/hyperliquid"
 
 [gates]
 min_sharpe = 1.0

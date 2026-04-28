@@ -39,7 +39,7 @@ Place them in `~/.hypemm.env` and source it from the tmux session, not in
 
 ## 4. Live execution config
 
-Knobs live in `configs/optimized.toml` under `[infra]` (defaults shown):
+Knobs live in `configs/live/min_size_4pair.toml` under `[infra]` (defaults shown):
 
 ```toml
 leverage = 5                # 5x cross-margin per coin
@@ -57,7 +57,7 @@ section 3.6.
 
 ## 5. Risk thresholds
 
-Defined in `configs/optimized.toml` under `[risk]`. Calibrated against THESIS
+Defined in `configs/live/min_size_4pair.toml` under `[risk]`. Calibrated against THESIS
 section 5.3.8 (worst backtest concurrent unrealized −$19,657).
 
 | Signal | WARN | HALT | Action on HALT |
@@ -81,7 +81,7 @@ From THESIS section 8.5. **Do not skip stages.**
 | Live small | $25K | $200K | $40K | $60K | 4 weeks | WR > 60%, no anomalies |
 | Live full | $50K | $400K | $80K | $120K | Ongoing | Rolling SR > 1.0 |
 
-Edit `notional_per_leg` in `configs/optimized.toml` between phases. Restart
+Edit `notional_per_leg` in `configs/live/min_size_4pair.toml` between phases. Restart
 the runner.
 
 ## 6. Starting the live runner
@@ -91,7 +91,7 @@ ssh dark-forest-guardian@100.91.78.8
 tmux new -s hype_mm_live
 source ~/.hypemm.env
 cd ~/hypemm
-uv run hypemm run --config configs/optimized.toml --live --confirm-live
+uv run hypemm run --config configs/live/min_size_4pair.toml --live --confirm-live
 ```
 
 The `--confirm-live` flag is required and intentionally redundant — protects
@@ -145,9 +145,9 @@ export HYPERLIQUID_ACCOUNT="0x..."       # testnet account
 ```bash
 cd ~/hypemm
 uv run hypemm run \
-  --config configs/paper_optimized.toml \
+  --config configs/testnet/optimized_3pair.toml \
   --live --confirm-live \
-  --log-file data/paper_optimized/runner.log
+  --log-file data/runs/testnet/optimized_3pair/runner.log
 ```
 
 ### What to verify (24-48h)

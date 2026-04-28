@@ -1,13 +1,6 @@
-# Default config — points to the optimized strategy
-# See configs/ for all variants:
-#   configs/original.toml         — original 4-pair strategy
-#   configs/optimized.toml        — walk-forward optimized (recommended)
-#   configs/optimized_hurst.toml  — optimized + Hurst gate (lower DD)
-#   configs/backtest/             — Binance data configs for research
-#
-# Usage:
-#   hypemm run                              # uses this file
-#   hypemm run --config configs/original.toml  # run a specific config
+# Testnet smoke-test config: 3 pairs (LINK/SOL omitted — LINK isn't on HL
+# testnet's universe). Smaller notional so a single faucet drip covers many
+# trades.
 
 [strategy]
 lookback_hours = 48
@@ -15,18 +8,13 @@ entry_z = 2.5
 exit_z = 0.5
 max_hold_hours = 36
 stop_loss_z = 4.0
-notional_per_leg = 50_000
+notional_per_leg = 200        # well above HL $10/leg min after rounding; 3 pairs x 2 legs @ 5x = $240 max margin
 cost_per_side_bps = 2.0
-slippage_per_side_bps = 0.0
 cooldown_hours = 2
 corr_window_hours = 168
 corr_threshold = 0.7
 progress_exit_hours = 12
 progress_exit_pct = 0.10
-
-[[strategy.pairs]]
-coin_a = "LINK"
-coin_b = "SOL"
 
 [[strategy.pairs]]
 coin_a = "DOGE"
@@ -41,10 +29,17 @@ coin_a = "DOGE"
 coin_b = "ADA"
 
 [infra]
-rest_url = "https://api.hyperliquid.xyz/info"
+# Testnet base URL — the LiveExecutionAdapter strips /info if present and uses
+# api.hyperliquid-testnet.xyz so the source byte switches to "b" automatically.
+rest_url = "https://api.hyperliquid-testnet.xyz/info"
 rate_limit_sec = 0.7
 poll_interval_sec = 60
-data_dir = "data"
+leverage = 5
+is_cross_margin = true
+max_slippage_bps = 25.0       # testnet books are thin; loosen vs 5 bps prod
+ioc_aggression_bps = 30.0
+fill_poll_seconds = 0.5
+fill_timeout_seconds = 30.0
 
 [gates]
 min_sharpe = 1.0
@@ -59,10 +54,11 @@ ob_collection_duration_sec = 7200
 lookbacks = [24, 48, 72]
 entry_zs = [1.5, 2.0, 2.5]
 
+# Scaled-down risk thresholds matching the smaller notional ($200/leg).
 [risk]
-unrealized_warn = -10_000.0
-unrealized_halt = -15_000.0
-daily_loss_halt = -5_000.0
+unrealized_warn = -40.0
+unrealized_halt = -60.0
+daily_loss_halt = -20.0
 win_rate_window = 30
 win_rate_warn = 0.55
 win_rate_min_trades = 10

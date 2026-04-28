@@ -158,7 +158,12 @@ def hold_time_distribution(trades: list[CompletedTrade]) -> None:
 
 
 def main() -> None:
-    app = load_config(Path("config.toml"))
+    import argparse
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--config", required=True)
+    args = parser.parse_args()
+    app = load_config(Path(args.config))
     config = app.strategy
     prices = load_candles(app.infra.candles_dir, config.all_coins)
 

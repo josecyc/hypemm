@@ -1,6 +1,6 @@
-# Paper-trading config for the walk-forward optimized 4-pair strategy.
-# Uses an isolated data_dir so it does not share state, logs, or reports with
-# other paper instances on the same checkout.
+# Walk-forward optimized 4-pair + Hurst gate, Binance Futures 6-year window.
+# Pairs: LINK/SOL, DOGE/AVAX, SOL/AVAX, DOGE/ADA.
+# Same as optimized_4pair_6y.toml but halts a pair when Hurst > 0.55 (trending).
 
 [strategy]
 lookback_hours = 48
@@ -13,6 +13,8 @@ cost_per_side_bps = 2.0
 cooldown_hours = 2
 corr_window_hours = 168
 corr_threshold = 0.7
+hurst_window_hours = 168
+hurst_threshold = 0.55
 progress_exit_hours = 12
 progress_exit_pct = 0.10
 
@@ -33,10 +35,12 @@ coin_a = "DOGE"
 coin_b = "ADA"
 
 [infra]
-rest_url = "https://api.hyperliquid.xyz/info"
+market_data_provider = "binance_futures"
+binance_futures_url = "https://fapi.binance.com"
+lookback_days = 2190
 rate_limit_sec = 0.7
 poll_interval_sec = 60
-data_dir = "data/paper_optimized"
+market_dir = "data/market/binance_futures/expanded"
 
 [gates]
 min_sharpe = 1.0
@@ -50,15 +54,3 @@ ob_collection_duration_sec = 7200
 [sweep]
 lookbacks = [24, 48, 72]
 entry_zs = [1.5, 2.0, 2.5]
-
-[risk]
-unrealized_warn = -10_000.0
-unrealized_halt = -15_000.0
-daily_loss_halt = -5_000.0
-win_rate_window = 30
-win_rate_warn = 0.55
-win_rate_min_trades = 10
-time_stop_window = 20
-time_stop_warn_pct = 0.30
-time_stop_min_trades = 10
-corr_warn_threshold = 0.65

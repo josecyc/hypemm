@@ -1,3 +1,6 @@
+# Original 4-pair strategy, Binance Futures 6-year window.
+# Pairs: LINK/SOL, DOGE/AVAX, SOL/AVAX, BTC/SOL.
+
 [strategy]
 lookback_hours = 48
 entry_z = 2.0
@@ -32,7 +35,7 @@ binance_futures_url = "https://fapi.binance.com"
 lookback_days = 2190
 rate_limit_sec = 0.2
 poll_interval_sec = 60
-data_dir = "data/binance_6y"
+market_dir = "data/market/binance_futures/6y"
 
 [gates]
 min_sharpe = 1.0

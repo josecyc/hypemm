@@ -34,24 +34,26 @@ EXTENDED_COINS = [
     "SEI", "XRP",
 ]
 
-# Dataset definitions: (dir_name, coins, description)
+# Dataset definitions: each writes under data/market/binance_futures/<window>/.
 DATASETS = {
-    "binance_2y": {
+    "2y": {
         "coins": ["BTC", "SOL", "AVAX", "LINK", "DOGE"],
         "lookback_days": 730,
         "description": "2-year core pairs (risk_analysis_reservoir.ipynb)",
     },
-    "binance_6y": {
+    "6y": {
         "coins": ["BTC", "SOL", "AVAX", "LINK", "DOGE"],
         "lookback_days": 2190,
         "description": "6-year core pairs (walkforward_analysis.ipynb)",
     },
-    "binance_expanded": {
+    "expanded": {
         "coins": CORE_COINS + EXTENDED_COINS,
         "lookback_days": 2190,
         "description": "24-coin expanded universe (pair scanning)",
     },
 }
+
+MARKET_ROOT = Path("data/market/binance_futures")
 
 
 def fetch_candles(
@@ -170,13 +172,11 @@ def fetch_funding(
     return True
 
 
-def fetch_dataset(
-    name: str, data_root: Path, force: bool = False
-) -> None:
-    """Fetch a complete dataset (candles + funding)."""
+def fetch_dataset(name: str, force: bool = False) -> None:
+    """Fetch a complete dataset (candles + funding) into data/market/."""
     ds = DATASETS[name]
-    candle_dir = data_root / name / "candles"
-    fund_dir = data_root / name / "funding"
+    candle_dir = MARKET_ROOT / name / "candles"
+    fund_dir = MARKET_ROOT / name / "funding"
     candle_dir.mkdir(parents=True, exist_ok=True)
     fund_dir.mkdir(parents=True, exist_ok=True)
 
@@ -196,7 +196,7 @@ def fetch_dataset(
         fetch_funding(coin, fund_dir, ds["lookback_days"], force=force)
 
 
-def run_backtests(data_root: Path) -> None:
+def run_backtests() -> None:
     """Run backtests to generate the report files notebooks depend on."""
     print(f"\n{'='*60}")
     print("Running backtests to generate report files...")
@@ -205,27 +205,27 @@ def run_backtests(data_root: Path) -> None:
     import subprocess
 
     configs = [
-        ("configs/backtest/config_binance_2y.toml", "binance_2y"),
-        ("configs/backtest/config_binance_6y.toml", "binance_6y"),
+        ("configs/backtest/original_4pair_2y.toml", "original_4pair_2y"),
+        ("configs/backtest/original_4pair_6y.toml", "original_4pair_6y"),
     ]
 
-    for cfg_path, name in configs:
-        reports_dir = data_root / name / "reports"
-        summary = reports_dir / "backtest_summary.json"
+    for cfg_path, stem in configs:
+        run_dir = Path("data/runs/backtest") / stem
+        summary = run_dir / "backtest_summary.json"
         if summary.exists():
-            print(f"\n  {name}: reports exist, skipping")
+            print(f"\n  {stem}: reports exist, skipping")
             continue
 
-        print(f"\n  {name}: running backtest...")
+        print(f"\n  {stem}: running backtest...")
         result = subprocess.run(
             ["uv", "run", "hypemm", "backtest", "--config", cfg_path],
             capture_output=True,
             text=True,
         )
         if result.returncode == 0:
-            print(f"  {name}: done")
+            print(f"  {stem}: done")
         else:
-            print(f"  {name}: failed")
+            print(f"  {stem}: failed")
             print(f"    {result.stderr[:200]}")
 
 
@@ -250,22 +250,20 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    data_root = Path("data")
-
     if args.quick:
-        datasets = ["binance_2y"]
+        datasets = ["2y"]
     else:
-        datasets = ["binance_2y", "binance_6y", "binance_expanded"]
+        datasets = ["2y", "6y", "expanded"]
 
     for ds in datasets:
-        fetch_dataset(ds, data_root, force=args.force)
+        fetch_dataset(ds, force=args.force)
 
     if not args.no_backtest:
-        run_backtests(data_root)
+        run_backtests()
 
     print(f"\n{'='*60}")
     print("Done! You can now run the notebooks:")
-    print("  cd verification && jupyter notebook")
+    print("  uv run jupyter lab notebooks")
     print(f"{'='*60}")
 
 

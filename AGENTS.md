@@ -1,5 +1,27 @@
 **Tradeoff:** These guidelines bias toward caution over speed. For trivial tasks, use judgment.
 
+## Repo-Specific Orientation
+
+Before changing this repository, read:
+
+1. `docs/CONVENTIONS.md` — directory layout, config naming, the
+   config-path-to-run-dir mapping, notebook rules
+2. `docs/RUNBOOK.md` — how to fetch data, run backtests, launch instances,
+   migrate state, recover from breakage
+3. `docs/CURRENT_STATE.md` — what's running on the server right now
+4. `README.md`
+
+Hard rules in this repo:
+
+- Configs live under `configs/<mode>/<stem>.toml` where mode is one of
+  `backtest`, `paper`, `testnet`, `live`. Nothing belongs at `configs/` root.
+- `data_dir` and `run_dir` are NOT TOML fields. Output paths are derived from
+  the config path. Setting them in TOML is a hard error.
+- Every run lands in `data/runs/<mode>/<stem>/`. Every market input lives in
+  `data/market/...`. Inputs and outputs never share a directory.
+- Notebooks consume committed artifacts; they do not invent parallel data
+  layouts.
+
 ## 1. Think Before Coding
 
 **Don't assume. Don't hide confusion. Surface tradeoffs.**
