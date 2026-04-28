@@ -1,5 +1,7 @@
 # hypemm — Cross-Perp Statistical Arbitrage on Hyperliquid
 
+![CI](https://github.com/josecyc/hypemm/actions/workflows/ci.yml/badge.svg)
+
 Trades mean-reversion of price ratios between correlated cryptocurrency
 perpetual futures on Hyperliquid. When two normally-correlated coins diverge
 significantly (measured by z-score), takes the opposite side and waits for
