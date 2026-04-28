@@ -208,9 +208,7 @@ class LiveExecutionAdapter:
         # account itself (no separate API wallet / vault). This matches the
         # rpo-{nb} convention where the keystore IS the account.
         self._account_address = (
-            account_address
-            or os.environ.get("HYPERLIQUID_ACCOUNT")
-            or self._signer.address
+            account_address or os.environ.get("HYPERLIQUID_ACCOUNT") or self._signer.address
         )
         self.leverage = leverage
         self.is_cross_margin = is_cross_margin
@@ -334,13 +332,12 @@ class LiveExecutionAdapter:
         action = {"type": "order", "orders": [order], "grouping": "na"}
         try:
             resp = self._post_signed(action)
-            logger.warning(
-                "FLATTEN %s: response=%s", asset.coin, resp
-            )
+            logger.warning("FLATTEN %s: response=%s", asset.coin, resp)
         except Exception as e:
             logger.critical(
                 "FLATTEN FAILED for %s — manual intervention required: %s",
-                asset.coin, e,
+                asset.coin,
+                e,
             )
 
     def fetch_user_state(self) -> dict[str, Any]:
@@ -372,9 +369,7 @@ class LiveExecutionAdapter:
         }
         resp = self._post_signed(action)
         if resp.get("status") != "ok":
-            raise ExecutionError(
-                f"updateLeverage failed for {asset.coin}: {resp!r}"
-            )
+            raise ExecutionError(f"updateLeverage failed for {asset.coin}: {resp!r}")
         logger.info(
             "Set %s leverage to %dx (%s)",
             asset.coin,
@@ -457,9 +452,7 @@ class LiveExecutionAdapter:
 
     def _post_signed(self, action: dict[str, Any]) -> dict[str, Any]:
         nonce_ms = int(time.time() * 1000)
-        signature = sign_l1_action(
-            self._signer, action, nonce_ms, is_mainnet=self.is_mainnet
-        )
+        signature = sign_l1_action(self._signer, action, nonce_ms, is_mainnet=self.is_mainnet)
         body = {"action": action, "nonce": nonce_ms, "signature": signature}
         r = self.client.post(self.rest_url + self.EXCHANGE_PATH, json=body, timeout=15.0)
         r.raise_for_status()

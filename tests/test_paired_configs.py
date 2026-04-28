@@ -20,9 +20,7 @@ PAPER_DIR = REPO_ROOT / "configs" / "paper"
 
 
 def _paired_stems() -> list[str]:
-    return sorted(
-        cfg.stem for cfg in LIVE_DIR.glob("*.toml") if (PAPER_DIR / cfg.name).exists()
-    )
+    return sorted(cfg.stem for cfg in LIVE_DIR.glob("*.toml") if (PAPER_DIR / cfg.name).exists())
 
 
 @pytest.mark.parametrize("stem", _paired_stems())
@@ -30,12 +28,12 @@ def test_live_and_paper_share_strategy(stem: str) -> None:
     live = load_config(LIVE_DIR / f"{stem}.toml")
     paper = load_config(PAPER_DIR / f"{stem}.toml")
 
-    assert asdict(live.strategy) == asdict(paper.strategy), (
-        f"strategy params drifted between live/{stem}.toml and paper/{stem}.toml"
-    )
-    assert asdict(live.risk) == asdict(paper.risk), (
-        f"risk thresholds drifted between live/{stem}.toml and paper/{stem}.toml"
-    )
+    assert asdict(live.strategy) == asdict(
+        paper.strategy
+    ), f"strategy params drifted between live/{stem}.toml and paper/{stem}.toml"
+    assert asdict(live.risk) == asdict(
+        paper.risk
+    ), f"risk thresholds drifted between live/{stem}.toml and paper/{stem}.toml"
 
 
 def test_every_live_config_has_a_paper_twin() -> None:

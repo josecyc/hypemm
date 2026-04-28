@@ -85,12 +85,14 @@ def test_load_slippage_profile_returns_none_when_missing(tmp_path: Path):
 def test_load_slippage_profile_picks_percentile(tmp_path: Path):
     p = tmp_path / "slip.json"
     p.write_text(
-        json.dumps({
-            "pairs": {
-                "BTC": {"median_bps": 0.5, "p90_bps": 1.5, "max_bps": 3.0},
-                "AVAX": {"median_bps": 3.0, "p90_bps": 5.0, "max_bps": 12.0},
+        json.dumps(
+            {
+                "pairs": {
+                    "BTC": {"median_bps": 0.5, "p90_bps": 1.5, "max_bps": 3.0},
+                    "AVAX": {"median_bps": 3.0, "p90_bps": 5.0, "max_bps": 12.0},
+                }
             }
-        })
+        )
     )
     median = load_slippage_profile(p, percentile="median_bps")
     assert median == {"BTC": 0.5, "AVAX": 3.0}
@@ -116,15 +118,11 @@ def test_backtest_applies_per_pair_slippage(tmp_path: Path):
     )
 
     no_slip = run_backtest_all_pairs(prices, cfg)
-    with_slip = run_backtest_all_pairs(
-        prices, cfg, slippage_profile={"X": 5.0, "Y": 5.0}
-    )
+    with_slip = run_backtest_all_pairs(prices, cfg, slippage_profile={"X": 5.0, "Y": 5.0})
 
     assert len(no_slip) == len(with_slip)
     # Per-trade slippage cost = 2 * 50_000 * (5+5) / 10000 = $100
     expected_delta_per_trade = 2 * 50_000 * (5.0 + 5.0) / 10_000
     no_total = sum(t.net_pnl for t in no_slip)
     with_total = sum(t.net_pnl for t in with_slip)
-    assert no_total - with_total == pytest.approx(
-        expected_delta_per_trade * len(no_slip)
-    )
+    assert no_total - with_total == pytest.approx(expected_delta_per_trade * len(no_slip))

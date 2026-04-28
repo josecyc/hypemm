@@ -2,18 +2,11 @@
 
 from __future__ import annotations
 
+import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from hypemm.models import PairConfig
-
-try:
-    import tomllib  # type: ignore[attr-defined]
-except ModuleNotFoundError:
-    try:
-        import tomli as tomllib  # type: ignore[no-redef]
-    except ModuleNotFoundError:
-        import toml as tomllib  # type: ignore[no-redef]
 
 
 @dataclass(frozen=True)
@@ -232,8 +225,7 @@ def load_config(path: Path) -> AppConfig:
         )
     if "run_dir" in infra_raw:
         raise ValueError(
-            f"{path}: 'run_dir' must not be set in TOML — it is derived from "
-            "the config path."
+            f"{path}: 'run_dir' must not be set in TOML — it is derived from " "the config path."
         )
     if "market_dir" in infra_raw:
         infra_raw["market_dir"] = Path(infra_raw["market_dir"])

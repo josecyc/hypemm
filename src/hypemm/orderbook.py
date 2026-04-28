@@ -30,7 +30,7 @@ class BookFill:
     levels_consumed: int
 
 
-def fetch_l2_book(client: httpx.Client, info_url: str, coin: str) -> dict:
+def fetch_l2_book(client: httpx.Client, info_url: str, coin: str) -> dict[str, object]:
     """Fetch the raw L2 book for a coin."""
     try:
         r = client.post(info_url, json={"type": "l2Book", "coin": coin}, timeout=10.0)
@@ -40,7 +40,7 @@ def fetch_l2_book(client: httpx.Client, info_url: str, coin: str) -> dict:
         raise DataFetchError(f"Failed to fetch L2 book for {coin}: {e}")
 
 
-def walk_book(book: dict, is_buy: bool, notional: float) -> BookFill:
+def walk_book(book: dict[str, object], is_buy: bool, notional: float) -> BookFill:
     """Walk the L2 book on the appropriate side and return the realized VWAP.
 
     is_buy=True consumes the ask side (we cross up); False consumes the bid

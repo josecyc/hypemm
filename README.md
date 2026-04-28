@@ -113,6 +113,15 @@ uv run ruff check .         # lint
 uv run mypy src/            # types
 ```
 
+CI runs all four on every push and PR (`.github/workflows/ci.yml`). Install
+the matching pre-commit hooks once per clone so the same checks fire locally
+before you commit:
+
+```bash
+uv run pre-commit install
+uv run pre-commit install --hook-type pre-push   # runs pytest before push
+```
+
 ## Architecture
 
 ```

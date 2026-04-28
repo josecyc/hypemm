@@ -1,0 +1,32 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+
+      - name: Install project
+        run: uv sync --all-extras
+
+      - name: black --check
+        run: uv run black --check .
+
+      - name: ruff
+        run: uv run ruff check .
+
+      - name: mypy
+        run: uv run mypy src/
+
+      - name: pytest
+        run: uv run pytest

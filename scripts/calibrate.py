@@ -84,9 +84,7 @@ def main() -> None:
     tol_ms = args.match_tolerance_hours * 3_600_000
     for lt in live:
         lts = int(datetime.fromisoformat(lt["entry_time"]).timestamp() * 1000)
-        cands = [
-            t for t in pool if t.pair_label == lt["pair"] and abs(t.entry_ts - lts) <= tol_ms
-        ]
+        cands = [t for t in pool if t.pair_label == lt["pair"] and abs(t.entry_ts - lts) <= tol_ms]
         if cands:
             best = min(cands, key=lambda t: abs(t.entry_ts - lts))
             matched.append((lt, best))
@@ -125,16 +123,22 @@ def main() -> None:
         direction = (
             Direction.LONG_RATIO if lt["direction"] == "long_ratio" else Direction.SHORT_RATIO
         )
-        entry_ts = (int(datetime.fromisoformat(lt["entry_time"]).timestamp() * 1000)
-                    // 3_600_000) * 3_600_000
-        exit_ts = (int(datetime.fromisoformat(lt["exit_time"]).timestamp() * 1000)
-                   // 3_600_000) * 3_600_000
+        entry_ts = (
+            int(datetime.fromisoformat(lt["entry_time"]).timestamp() * 1000) // 3_600_000
+        ) * 3_600_000
+        exit_ts = (
+            int(datetime.fromisoformat(lt["exit_time"]).timestamp() * 1000) // 3_600_000
+        ) * 3_600_000
         if exit_ts <= entry_ts:
             exit_ts = entry_ts + 3_600_000
         try:
             fc = compute_funding_cost(
-                direction, notional, entry_ts, exit_ts,
-                funding_df[coin_a], funding_df[coin_b],
+                direction,
+                notional,
+                entry_ts,
+                exit_ts,
+                funding_df[coin_a],
+                funding_df[coin_b],
             )
         except (KeyError, ValueError):
             skipped += 1
@@ -142,8 +146,10 @@ def main() -> None:
         total_funding += fc
         per_pair[lt["pair"]] = per_pair.get(lt["pair"], 0.0) + fc
 
-    print(f"\nFunding (estimated for live trades using HL rates):")
-    print(f"  Total: ${total_funding:+,.0f}  (${total_funding/max(len(live)-skipped,1):+.1f}/trade)")
+    print("\nFunding (estimated for live trades using HL rates):")
+    print(
+        f"  Total: ${total_funding:+,.0f}  (${total_funding/max(len(live)-skipped,1):+.1f}/trade)"
+    )
     for p, f in sorted(per_pair.items()):
         print(f"  {p}: ${f:+.0f}")
 

@@ -41,9 +41,7 @@ def test_no_files_at_configs_root() -> None:
 
 def test_current_state_references_real_configs() -> None:
     text = CURRENT_STATE.read_text()
-    referenced = re.findall(
-        r"configs/(?:backtest|paper|testnet|live)/[\w./-]+?\.toml", text
-    )
+    referenced = re.findall(r"configs/(?:backtest|paper|testnet|live)/[\w./-]+?\.toml", text)
     missing = sorted({r for r in referenced if not (REPO_ROOT / r).exists()})
     assert not missing, (
         f"docs/CURRENT_STATE.md references configs that no longer exist: {missing}. "

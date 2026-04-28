@@ -29,9 +29,23 @@ CORE_COINS = ["BTC", "ETH", "SOL", "DOGE", "LINK", "AVAX", "ADA"]
 
 # Extended coins (used by the expanded universe notebook analysis)
 EXTENDED_COINS = [
-    "AAVE", "NEAR", "FIL", "ATOM", "UNI", "LTC", "DOT",
-    "SUI", "ARB", "OP", "APT", "WLD", "ZEC", "INJ", "FET",
-    "SEI", "XRP",
+    "AAVE",
+    "NEAR",
+    "FIL",
+    "ATOM",
+    "UNI",
+    "LTC",
+    "DOT",
+    "SUI",
+    "ARB",
+    "OP",
+    "APT",
+    "WLD",
+    "ZEC",
+    "INJ",
+    "FET",
+    "SEI",
+    "XRP",
 ]
 
 # Dataset definitions: each writes under data/market/binance_futures/<window>/.
@@ -56,9 +70,7 @@ DATASETS = {
 MARKET_ROOT = Path("data/market/binance_futures")
 
 
-def fetch_candles(
-    coin: str, out_dir: Path, lookback_days: int, force: bool = False
-) -> bool:
+def fetch_candles(coin: str, out_dir: Path, lookback_days: int, force: bool = False) -> bool:
     """Fetch hourly candles from Binance Futures."""
     out_path = out_dir / f"{coin}_1h.csv"
 
@@ -84,9 +96,7 @@ def fetch_candles(
             "limit": 1500,
         }
         try:
-            resp = httpx.get(
-                f"{BINANCE_URL}/fapi/v1/klines", params=params, timeout=15
-            )
+            resp = httpx.get(f"{BINANCE_URL}/fapi/v1/klines", params=params, timeout=15)
             if resp.status_code == 400:
                 print(f"    {coin} candles: not available on Binance Futures")
                 return False
@@ -113,16 +123,11 @@ def fetch_candles(
 
     first = datetime.fromtimestamp(all_candles[0][0] / 1000, tz=timezone.utc)
     last = datetime.fromtimestamp(all_candles[-1][0] / 1000, tz=timezone.utc)
-    print(
-        f"    {coin} candles: {len(all_candles):,} bars "
-        f"({first.date()} → {last.date()})"
-    )
+    print(f"    {coin} candles: {len(all_candles):,} bars " f"({first.date()} → {last.date()})")
     return True
 
 
-def fetch_funding(
-    coin: str, out_dir: Path, lookback_days: int, force: bool = False
-) -> bool:
+def fetch_funding(coin: str, out_dir: Path, lookback_days: int, force: bool = False) -> bool:
     """Fetch funding rate history from Binance Futures."""
     out_path = out_dir / f"{coin}_1h.csv"
 
@@ -143,9 +148,7 @@ def fetch_funding(
     while cursor < end_ms:
         params = {"symbol": symbol, "startTime": cursor, "limit": 1000}
         try:
-            resp = httpx.get(
-                f"{BINANCE_URL}/fapi/v1/fundingRate", params=params, timeout=15
-            )
+            resp = httpx.get(f"{BINANCE_URL}/fapi/v1/fundingRate", params=params, timeout=15)
             if resp.status_code != 200:
                 break
             rates = resp.json()
@@ -230,9 +233,7 @@ def run_backtests() -> None:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(
-        description="Fetch historical data for notebooks"
-    )
+    parser = argparse.ArgumentParser(description="Fetch historical data for notebooks")
     parser.add_argument(
         "--quick",
         action="store_true",

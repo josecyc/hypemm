@@ -66,23 +66,22 @@ def _save_trades_csv(path: Path, trades: list[CompletedTrade]) -> None:
 
 
 def _daily_equity_rows(trades: list[CompletedTrade]) -> list[dict[str, object]]:
-    daily: dict[str, dict[str, object]] = {}
-    cumulative = 0.0
+    daily_pnl: dict[str, float] = {}
+    num_trades: dict[str, int] = {}
     for t in sorted(trades, key=lambda tr: tr.exit_ts):
         day = datetime.fromtimestamp(t.exit_ts / 1000, tz=timezone.utc).strftime("%Y-%m-%d")
-        if day not in daily:
-            daily[day] = {"date": day, "daily_pnl": 0.0, "num_trades": 0}
-        daily[day]["daily_pnl"] = float(daily[day]["daily_pnl"]) + t.net_pnl
-        daily[day]["num_trades"] = int(daily[day]["num_trades"]) + 1
+        daily_pnl[day] = daily_pnl.get(day, 0.0) + t.net_pnl
+        num_trades[day] = num_trades.get(day, 0) + 1
 
     rows: list[dict[str, object]] = []
-    for day in sorted(daily):
-        cumulative += float(daily[day]["daily_pnl"])
+    cumulative = 0.0
+    for day in sorted(daily_pnl):
+        cumulative += daily_pnl[day]
         rows.append(
             {
                 "date": day,
-                "daily_pnl": float(daily[day]["daily_pnl"]),
-                "num_trades": int(daily[day]["num_trades"]),
+                "daily_pnl": daily_pnl[day],
+                "num_trades": num_trades[day],
                 "cumulative_pnl": cumulative,
             }
         )
@@ -173,9 +172,7 @@ def cmd_backtest(args: argparse.Namespace) -> None:
     )
     bt_unfiltered = summarize_backtest(trades_unfiltered, prices)
 
-    trades = run_backtest_all_pairs(
-        prices, config, funding=funding, slippage_profile=profile
-    )
+    trades = run_backtest_all_pairs(prices, config, funding=funding, slippage_profile=profile)
     bt_result = summarize_backtest(trades, prices)
 
     logging.info(
@@ -445,7 +442,10 @@ def cmd_snapshot_slippage(args: argparse.Namespace) -> None:
 
     logging.info(
         "Snapshotting slippage at $%s notional for %d coins, %ds (interval %ss)",
-        f"{notional:,.0f}", len(coins), duration, poll_interval,
+        f"{notional:,.0f}",
+        len(coins),
+        duration,
+        poll_interval,
     )
     try:
         while time.monotonic() < deadline:
@@ -468,9 +468,7 @@ def cmd_snapshot_slippage(args: argparse.Namespace) -> None:
             continue
         profile[coin] = {
             "median_bps": statistics.median(vals),
-            "p90_bps": (
-                statistics.quantiles(vals, n=10)[8] if len(vals) >= 10 else max(vals)
-            ),
+            "p90_bps": (statistics.quantiles(vals, n=10)[8] if len(vals) >= 10 else max(vals)),
             "max_bps": max(vals),
             "samples": len(vals),
         }
@@ -515,9 +513,7 @@ def cmd_dashboard(args: argparse.Namespace) -> None:
     console = Console(force_terminal=True)
 
     if args.once:
-        snapshot = load_dashboard_snapshot(
-            app, fresh=args.fresh, trades_rows=args.trades_rows
-        )
+        snapshot = load_dashboard_snapshot(app, fresh=args.fresh, trades_rows=args.trades_rows)
         console.print(build_dashboard(snapshot))
         return
 
@@ -714,11 +710,15 @@ def main() -> None:
     )
     snap_p.add_argument("--config", required=True, help="Config file path")
     snap_p.add_argument(
-        "--duration", type=int, default=10,
+        "--duration",
+        type=int,
+        default=10,
         help="Total polling duration in minutes (default: 10)",
     )
     snap_p.add_argument(
-        "--interval", type=int, default=30,
+        "--interval",
+        type=int,
+        default=30,
         help="Seconds between polls (default: 30)",
     )
     snap_p.set_defaults(func=cmd_snapshot_slippage)
@@ -729,19 +729,25 @@ def main() -> None:
     )
     dash_p.add_argument("--config", required=True, help="Config file path")
     dash_p.add_argument(
-        "--refresh", type=float, default=5.0,
+        "--refresh",
+        type=float,
+        default=5.0,
         help="Seconds between dashboard refreshes (default: 5)",
     )
     dash_p.add_argument(
-        "--fresh", action="store_true",
+        "--fresh",
+        action="store_true",
         help="Ignore on-disk history; render an empty starting view",
     )
     dash_p.add_argument(
-        "--once", action="store_true",
+        "--once",
+        action="store_true",
         help="Render once and exit (no Live loop) — useful for snapshots/CI",
     )
     dash_p.add_argument(
-        "--trades-rows", type=int, default=15,
+        "--trades-rows",
+        type=int,
+        default=15,
         help=(
             "How many recent completed trades to show in the live panel "
             "(default: 15). The full log is always available via `hypemm trades`."
@@ -755,11 +761,14 @@ def main() -> None:
     )
     trades_p.add_argument("--config", required=True, help="Config file path")
     trades_p.add_argument(
-        "--tail", type=int, default=0,
+        "--tail",
+        type=int,
+        default=0,
         help="Show only the last N trades (0 = full log, default)",
     )
     trades_p.add_argument(
-        "--no-pager", action="store_true",
+        "--no-pager",
+        action="store_true",
         help="Disable the pager (just print to stdout)",
     )
     trades_p.set_defaults(func=cmd_trades)

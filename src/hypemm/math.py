@@ -176,9 +176,7 @@ def hurst_exponent(series: np.ndarray, max_lag: int = 20) -> float:
     return float(np.clip(h, 0.0, 1.0))
 
 
-def rolling_hurst(
-    log_ratios: np.ndarray, window: int, max_lag: int = 20
-) -> np.ndarray:
+def rolling_hurst(log_ratios: np.ndarray, window: int, max_lag: int = 20) -> np.ndarray:
     """Compute rolling Hurst exponent on log price ratios."""
     n = len(log_ratios)
     result = np.full(n, np.nan)
@@ -237,9 +235,7 @@ def adf_test(series: np.ndarray, max_lag: int = 1) -> float:
     return float(beta[0] / se[0])
 
 
-def rolling_adf(
-    log_ratios: np.ndarray, window: int, max_lag: int = 1
-) -> np.ndarray:
+def rolling_adf(log_ratios: np.ndarray, window: int, max_lag: int = 1) -> np.ndarray:
     """Compute rolling ADF t-statistic on log price ratios."""
     n = len(log_ratios)
     result = np.full(n, np.nan)

@@ -3,13 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from enum import Enum, IntEnum
-
-try:
-    from enum import StrEnum
-except ImportError:
-    class StrEnum(str, Enum):
-        """Python 3.10-compatible fallback for enum.StrEnum."""
+from enum import IntEnum, StrEnum
 
 
 class Direction(IntEnum):

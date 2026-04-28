@@ -181,7 +181,7 @@ def fetch_binance_coin_funding(
     event_rates: dict[int, float] = {}
 
     while cursor_ms <= end_ms:
-        params = {
+        params: dict[str, str | int] = {
             "symbol": symbol,
             "startTime": cursor_ms,
             "endTime": end_ms,

@@ -73,9 +73,7 @@ def run_backtest(
     hurst_values = None
     adf_values = None
     if config.hurst_threshold >= 0:
-        hurst_values = rolling_hurst(
-            log_ratios, config.hurst_window_hours
-        )
+        hurst_values = rolling_hurst(log_ratios, config.hurst_window_hours)
     if config.adf_threshold < 0:
         adf_values = rolling_adf(log_ratios, config.hurst_window_hours)
 
@@ -138,9 +136,7 @@ def run_backtest(
                     # so cost = 2 * notional * slip_bps / 10000 per leg.
                     slip_a = slippage_profile.get(pair.coin_a, 0.0)
                     slip_b = slippage_profile.get(pair.coin_b, 0.0)
-                    slip_dollars = (
-                        2 * config.notional_per_leg * (slip_a + slip_b) / 10_000
-                    )
+                    slip_dollars = 2 * config.notional_per_leg * (slip_a + slip_b) / 10_000
                     trade = replace(
                         trade,
                         cost=trade.cost + slip_dollars,

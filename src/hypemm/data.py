@@ -177,7 +177,7 @@ def fetch_binance_coin_candles(
     all_rows: list[dict[str, float | int]] = []
 
     while cursor_ms < now_ms:
-        params = {
+        params: dict[str, str | int] = {
             "symbol": symbol,
             "interval": "1h",
             "startTime": cursor_ms,

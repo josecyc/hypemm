@@ -397,7 +397,11 @@ def _daily_pnl_series(
 
     normalized_days = sorted(
         {
-            pd.Timestamp(day).tz_convert("UTC") if pd.Timestamp(day).tzinfo else pd.Timestamp(day, tz="UTC")
+            (
+                pd.Timestamp(day).tz_convert("UTC")
+                if pd.Timestamp(day).tzinfo
+                else pd.Timestamp(day, tz="UTC")
+            )
             for day in calendar_days
         }
     )
@@ -411,7 +415,9 @@ def _select_training_config(
     selection_metric: str,
 ) -> tuple[str, StrategyConfig, list[CompletedTrade]]:
     """Pick the best config on the training window and return its trades."""
-    scored: list[tuple[tuple[float, float, float, float], str, StrategyConfig, list[CompletedTrade]]] = []
+    scored: list[
+        tuple[tuple[float, float, float, float], str, StrategyConfig, list[CompletedTrade]]
+    ] = []
     for name, candidate in candidates.items():
         trades = run_backtest_all_pairs(train_prices, candidate, funding=funding)
         score = _training_score(trades, selection_metric)

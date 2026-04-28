@@ -28,9 +28,7 @@ class Divergence:
     actual_size: float  # signed; positive = long, negative = short, 0 = flat
 
 
-def _expected_size_per_coin(
-    engine: StrategyEngine, notional_per_leg: float
-) -> dict[str, float]:
+def _expected_size_per_coin(engine: StrategyEngine, notional_per_leg: float) -> dict[str, float]:
     """Sum signed expected position size per coin across all open pair positions.
 
     For LONG_RATIO: long coin_a, short coin_b.

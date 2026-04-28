@@ -295,7 +295,5 @@ class TestBuildTradesLogTable:
         assert "P11/X" in out
 
     def test_custom_title(self) -> None:
-        out = _render_table(
-            build_trades_log_table([_make_trade()], title="My Trades (3 of 99)")
-        )
+        out = _render_table(build_trades_log_table([_make_trade()], title="My Trades (3 of 99)"))
         assert "My Trades (3 of 99)" in out
