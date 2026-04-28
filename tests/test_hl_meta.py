@@ -38,9 +38,25 @@ def test_round_price_respects_sigfigs():
     assert round_price(12345.678, 0) == 12346.0
     # 123.45678 with sz_decimals=0 → px_decimals=6, but limited to 5 sig figs → 123.46
     assert round_price(123.45678, 0) == 123.46
-    # 0.123456 has 6 sig figs in result, px_decimals=4 → 0.1235, but sub-1 path bypasses
-    # the sigfigs check. Just verify decimals are respected.
+    # 0.123456 with sz_decimals=2 → px_decimals=4, sigfigs cap → 0.1235
     assert round_price(0.123456, 2) == 0.1235
+
+
+def test_round_price_subdollar_sigfigs_enforced():
+    """Regression: pre-fix code skipped the 5-sigfig check for sub-1 prices.
+
+    DOGE szDecimals=0; once mid crossed $0.10 the IoC limit price computed
+    as e.g. 0.100065, which round(_, 6) leaves at 0.100065 — 6 sig figs.
+    HL rejects with "Price must be divisible by tick size".
+    """
+    # 0.100065 → must collapse to 5 sig figs at 5 decimals: 0.10006 or 0.10007
+    out = round_price(0.100065, 0)
+    assert len(f"{out:.6f}".rstrip("0").rstrip(".").lstrip("0").lstrip(".")) <= 5
+    assert out in (0.10006, 0.10007)
+    # 0.247247 (ADA) → 5 sig figs: 0.24725
+    assert round_price(0.247247, 0) == 0.24725
+    # 0.099064 (DOGE pre-cross) → already 5 sig figs at 6 decimals, unchanged
+    assert round_price(0.099064, 0) == 0.099064
 
 
 def test_round_price_zero_rejected():

@@ -18,7 +18,7 @@ from pathlib import Path
 from hypemm.config import AppConfig
 from hypemm.data import seed_price_buffer
 from hypemm.engine import StrategyEngine
-from hypemm.execution import ExecutionAdapter, PaperExecutionAdapter
+from hypemm.execution import ExecutionAdapter, ExecutionError, PaperExecutionAdapter
 from hypemm.funding import accrue_hourly_funding, fetch_latest_funding_rates
 from hypemm.models import (
     CompletedTrade,
@@ -196,27 +196,47 @@ def _run_loop(
             _accrue_funding(engine, adapter, config.all_coins, config.notional_per_leg)
             orders = engine.process_bar(signals, now_ms)
             for order in orders:
-                if isinstance(order, EntryOrder):
-                    fa, fb = adapter.get_fill_prices(
-                        order.pair, order.direction, config.notional_per_leg
-                    )
-                    engine.confirm_entry(order, fa, fb, now_ms)
-                elif isinstance(order, ExitOrder):
-                    fa, fb = adapter.get_fill_prices(
-                        order.pair,
-                        order.position.direction,
-                        config.notional_per_leg,
-                    )
-                    accrued = order.position.funding_paid
-                    trade = engine.confirm_exit(order, fa, fb, now_ms)
-                    if accrued != 0.0:
-                        trade = replace(
-                            trade,
-                            funding_cost=accrued,
-                            net_pnl=trade.net_pnl - accrued,
+                # Per-order isolation: an exchange rejection on one pair (e.g.
+                # tick-size, depth, leverage) must NOT kill the runner — other
+                # pairs still need their orders processed and the loop must
+                # keep ticking. We log loudly and the engine simply doesn't
+                # see a confirmation, leaving the position state unchanged.
+                # An open ExitOrder that fails is the worst case: position
+                # stays open another hour and is retried on the next bar.
+                try:
+                    if isinstance(order, EntryOrder):
+                        fa, fb = adapter.get_fill_prices(
+                            order.pair, order.direction, config.notional_per_leg
                         )
-                    log_trade(trade, trades_path)
-                    completed_trades.append(trade)
+                        engine.confirm_entry(order, fa, fb, now_ms)
+                    elif isinstance(order, ExitOrder):
+                        fa, fb = adapter.get_fill_prices(
+                            order.pair,
+                            order.position.direction,
+                            config.notional_per_leg,
+                        )
+                        accrued = order.position.funding_paid
+                        trade = engine.confirm_exit(order, fa, fb, now_ms)
+                        if accrued != 0.0:
+                            trade = replace(
+                                trade,
+                                funding_cost=accrued,
+                                net_pnl=trade.net_pnl - accrued,
+                            )
+                        log_trade(trade, trades_path)
+                        completed_trades.append(trade)
+                except ExecutionError as e:
+                    pair_label = (
+                        order.pair.label
+                        if isinstance(order, EntryOrder)
+                        else order.position.pair.label
+                    )
+                    logger.error(
+                        "Order failed for %s (%s) — skipping this bar, runner continues: %s",
+                        pair_label,
+                        type(order).__name__,
+                        e,
+                    )
 
             log_hourly_snapshot(engine, signals, config, snapshot_path)
             save_state(engine, state_path, start_time)
