@@ -86,8 +86,15 @@ class ExecutionAdapter(Protocol):
         pair: PairConfig,
         direction: Direction,
         notional_per_leg: float,
+        *,
+        is_close: bool = False,
     ) -> tuple[float, float]:
         """Get fill prices for a trade.
+
+        `direction` is always the ENTRY direction of the position. When
+        is_close=True the adapter inverts each leg and (for live) sets
+        reduceOnly so the order closes the existing position instead of
+        opening a fresh same-direction one.
 
         For paper: returns current mid prices from the API.
         For live: places orders and returns actual fills.
@@ -118,16 +125,21 @@ class PaperExecutionAdapter:
         pair: PairConfig,
         direction: Direction,
         notional_per_leg: float,
+        *,
+        is_close: bool = False,
     ) -> tuple[float, float]:
         """Walk the L2 book on each leg and return the realized VWAP."""
         is_buy_a = direction == Direction.LONG_RATIO
+        if is_close:
+            is_buy_a = not is_buy_a
         is_buy_b = not is_buy_a
         fa = book_vwap(self.client, self.rest_url, pair.coin_a, is_buy_a, notional_per_leg)
         fb = book_vwap(self.client, self.rest_url, pair.coin_b, is_buy_b, notional_per_leg)
         logger.info(
-            "Paper fill %s %s: %s slip=%.2fbps, %s slip=%.2fbps",
+            "Paper fill %s %s%s: %s slip=%.2fbps, %s slip=%.2fbps",
             pair.label,
             direction.label,
+            " (close)" if is_close else "",
             pair.coin_a,
             fa.slippage_bps,
             pair.coin_b,
@@ -253,10 +265,17 @@ class LiveExecutionAdapter:
         pair: PairConfig,
         direction: Direction,
         notional_per_leg: float,
+        *,
+        is_close: bool = False,
     ) -> tuple[float, float]:
         """Place IoC orders for both legs and return realized VWAP fill prices.
 
-        Direction LONG_RATIO = long A, short B. SHORT_RATIO = short A, long B.
+        `direction` is the ENTRY direction (LONG_RATIO = long A, short B;
+        SHORT_RATIO = short A, long B). When is_close=True both legs are
+        flipped and orders go out reduceOnly so HL closes the existing
+        position rather than opening a same-direction add — without this,
+        an exit places another entry and doubles the position.
+
         Aborts (raises ExecutionError) if any leg fails to fill within
         fill_timeout_seconds, or if the realized fill exceeds max_slippage_bps.
         """
@@ -272,6 +291,8 @@ class LiveExecutionAdapter:
                 self._leverage_set.add(coin)
 
         is_buy_a = direction == Direction.LONG_RATIO
+        if is_close:
+            is_buy_a = not is_buy_a
         is_buy_b = not is_buy_a
 
         mid_a = self.fetch_mid(pair.coin_a)
@@ -296,12 +317,16 @@ class LiveExecutionAdapter:
                     f"(notional {notional_per_leg}, size {rounded}, mid {mid:.6f})"
                 )
 
-        order_id_a = self._place_ioc(meta[pair.coin_a], is_buy_a, size_a, mid_a)
+        order_id_a = self._place_ioc(
+            meta[pair.coin_a], is_buy_a, size_a, mid_a, reduce_only=is_close
+        )
         # If leg B fails AFTER leg A filled, we MUST flatten leg A to avoid an
         # unhedged position. Try-block scopes that recovery; failures inside
         # are logged but the original error is what propagates.
         try:
-            order_id_b = self._place_ioc(meta[pair.coin_b], is_buy_b, size_b, mid_b)
+            order_id_b = self._place_ioc(
+                meta[pair.coin_b], is_buy_b, size_b, mid_b, reduce_only=is_close
+            )
             fill_a = self._await_fill(pair.coin_a, order_id_a)
             fill_b = self._await_fill(pair.coin_b, order_id_b)
         except ExecutionError as e:
@@ -383,6 +408,8 @@ class LiveExecutionAdapter:
         is_buy: bool,
         size: float,
         mid_price: float,
+        *,
+        reduce_only: bool = False,
     ) -> int:
         """Place an IoC limit order with a price aggressive enough to cross."""
         sign = 1 if is_buy else -1
@@ -394,7 +421,7 @@ class LiveExecutionAdapter:
             "b": is_buy,
             "p": format_price(crossing_price, asset.sz_decimals),
             "s": format_size(size, asset.sz_decimals),
-            "r": False,
+            "r": reduce_only,
             "t": {"limit": {"tif": "Ioc"}},
         }
         action = {"type": "order", "orders": [order], "grouping": "na"}

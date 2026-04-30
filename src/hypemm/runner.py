@@ -209,6 +209,7 @@ def _run_loop(
                             order.pair,
                             order.position.direction,
                             config.notional_per_leg,
+                            is_close=True,
                         )
                         accrued = order.position.funding_paid
                         trade = engine.confirm_exit(order, fa, fb, now_ms)

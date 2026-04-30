@@ -210,6 +210,69 @@ def test_get_fill_prices_long_ratio_places_correct_legs():
     assert order_calls[1]["json"]["action"]["orders"][0]["b"] is False
 
 
+def test_get_fill_prices_close_inverts_legs_and_sets_reduce_only():
+    """Regression: ExitOrder used to re-enter the same direction.
+
+    When the runner closes a SHORT_RATIO position it passes the entry
+    direction with is_close=True. Both legs must flip and both orders
+    must go out reduceOnly so HL closes the existing position rather
+    than opening a same-direction add.
+    """
+    client = _MockClient()
+    client.queue("meta", _meta_payload())
+    client.queue("exchange:updateLeverage", {"status": "ok"})
+    client.queue("exchange:updateLeverage", {"status": "ok"})
+    client.queue("l2Book:LINK", {"levels": [[{"px": "10.0"}], [{"px": "10.02"}]]})
+    client.queue("l2Book:SOL", {"levels": [[{"px": "100.0"}], [{"px": "100.04"}]]})
+    client.queue("exchange:order", _ok_status(111))
+    client.queue("exchange:order", _ok_status(222))
+    client.queue("userFills", [{"oid": 111, "px": "10.01", "sz": "5000.0"}])
+    client.queue("userFills", [{"oid": 222, "px": "100.02", "sz": "500.0"}])
+
+    adapter = _make_adapter(client)
+    adapter.get_fill_prices(
+        PairConfig("LINK", "SOL"), Direction.SHORT_RATIO, 50_000.0, is_close=True
+    )
+
+    order_calls = [
+        c
+        for c in client.calls
+        if "/exchange" in c["url"] and c["json"]["action"]["type"] == "order"
+    ]
+    # SHORT_RATIO entry would be: sell A, buy B. Closing it inverts: buy A, sell B.
+    leg_a = order_calls[0]["json"]["action"]["orders"][0]
+    leg_b = order_calls[1]["json"]["action"]["orders"][0]
+    assert leg_a["b"] is True   # buy LINK to close prior short
+    assert leg_b["b"] is False  # sell SOL to close prior long
+    assert leg_a["r"] is True   # reduceOnly
+    assert leg_b["r"] is True
+
+
+def test_get_fill_prices_open_keeps_reduce_only_false():
+    """Sanity: entries (is_close=False) keep reduce_only off."""
+    client = _MockClient()
+    client.queue("meta", _meta_payload())
+    client.queue("exchange:updateLeverage", {"status": "ok"})
+    client.queue("exchange:updateLeverage", {"status": "ok"})
+    client.queue("l2Book:LINK", {"levels": [[{"px": "10.0"}], [{"px": "10.02"}]]})
+    client.queue("l2Book:SOL", {"levels": [[{"px": "100.0"}], [{"px": "100.04"}]]})
+    client.queue("exchange:order", _ok_status(111))
+    client.queue("exchange:order", _ok_status(222))
+    client.queue("userFills", [{"oid": 111, "px": "10.005", "sz": "5000.0"}])
+    client.queue("userFills", [{"oid": 222, "px": "100.01", "sz": "500.0"}])
+
+    adapter = _make_adapter(client)
+    adapter.get_fill_prices(PairConfig("LINK", "SOL"), Direction.LONG_RATIO, 50_000.0)
+
+    order_calls = [
+        c
+        for c in client.calls
+        if "/exchange" in c["url"] and c["json"]["action"]["type"] == "order"
+    ]
+    assert order_calls[0]["json"]["action"]["orders"][0]["r"] is False
+    assert order_calls[1]["json"]["action"]["orders"][0]["r"] is False
+
+
 def test_get_fill_prices_aborts_on_excess_slippage():
     client = _MockClient()
     client.queue("meta", _meta_payload())
