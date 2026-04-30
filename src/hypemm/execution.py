@@ -342,13 +342,19 @@ class LiveExecutionAdapter:
     def _flatten_position(
         self, asset: AssetMeta, was_buy: bool, size: float, mid_price: float
     ) -> None:
-        """Emergency flatten: place a reduceOnly IoC opposite to the original."""
-        sign = -1 if was_buy else 1  # opposite direction to close
-        crossing_price = mid_price * (1 + sign * (-self.ioc_aggression_bps) / 10_000)
+        """Emergency flatten: place a reduceOnly IoC opposite to the original.
+
+        Closing a long means SELLING into the bid → limit must sit below mid.
+        Closing a short means BUYING from the ask → limit must sit above mid.
+        Equivalent to _place_ioc with the side flipped.
+        """
+        is_buy_close = not was_buy
+        sign = 1 if is_buy_close else -1
+        crossing_price = mid_price * (1 + sign * self.ioc_aggression_bps / 10_000)
         crossing_price = round_price(crossing_price, asset.sz_decimals)
         order = {
             "a": asset.asset_id,
-            "b": not was_buy,
+            "b": is_buy_close,
             "p": format_price(crossing_price, asset.sz_decimals),
             "s": format_size(size, asset.sz_decimals),
             "r": True,  # reduceOnly

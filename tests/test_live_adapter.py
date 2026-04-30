@@ -361,6 +361,11 @@ def test_leg_b_failure_triggers_leg_a_flatten():
     flatten = order_calls[2]["json"]["action"]["orders"][0]
     assert flatten["r"] is True  # reduceOnly
     assert flatten["b"] is False  # opposite of original LONG_RATIO leg A buy
+    # Closing a long → SELL → IoC limit must sit at or below the bid (10.0)
+    # to cross immediately. A prior bug inverted the price side, putting the
+    # limit above mid; HL refused with "could not immediately match against
+    # any resting orders."
+    assert float(flatten["p"]) <= 10.0
 
 
 # -- fetch_user_state ------------------------------------------------------
