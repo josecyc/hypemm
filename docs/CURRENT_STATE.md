@@ -36,7 +36,10 @@ Preserved on disk but not relaunched.
   reorganization on 2026-04-28.
 - `data/runs/paper/_legacy_default/` — orphan state.json from the old default
   `data/paper_trades/` location.
+- `data/runs/paper/_legacy_min_size_4pair_pre_live/` — 2 days of paper trades
+  at $25/leg run 2026-04-28 → 2026-04-30, before paper was reset to align
+  start time with the mainnet live twin for a clean head-to-head.
 - `data/runs/testnet/optimized_3pair/` — testnet smoke-test artifacts; no
   active runner.
 
-Last deployed commit, server-side: `41315fb` (verified 2026-04-28).
+Last deployed commit, server-side: `cefc890` (verified 2026-04-30).
