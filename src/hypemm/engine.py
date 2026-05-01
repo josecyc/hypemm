@@ -137,6 +137,8 @@ class StrategyEngine:
         fill_price_a: float,
         fill_price_b: float,
         timestamp_ms: int,
+        filled_size_a: float = 0.0,
+        filled_size_b: float = 0.0,
     ) -> OpenPosition:
         """Confirm an entry fill. Registers the position internally."""
         if self.config.corr_threshold >= 0 and order.signal.correlation is None:
@@ -150,6 +152,8 @@ class StrategyEngine:
             entry_price_b=fill_price_b,
             entry_time_ms=timestamp_ms,
             entry_correlation=corr,
+            filled_size_a=filled_size_a,
+            filled_size_b=filled_size_b,
         )
         self.positions[order.pair.label] = pos
         return pos
@@ -213,6 +217,8 @@ class StrategyEngine:
                     "entry_price_b": pos.entry_price_b,
                     "entry_time_ms": pos.entry_time_ms,
                     "entry_correlation": pos.entry_correlation,
+                    "filled_size_a": pos.filled_size_a,
+                    "filled_size_b": pos.filled_size_b,
                     "hours_held": pos.hours_held,
                     "funding_paid": pos.funding_paid,
                 }
@@ -247,6 +253,8 @@ class StrategyEngine:
                 entry_price_b=float(pos_data["entry_price_b"]),
                 entry_time_ms=int(pos_data["entry_time_ms"]),
                 entry_correlation=float(pos_data["entry_correlation"]),
+                filled_size_a=float(pos_data.get("filled_size_a", 0.0)),
+                filled_size_b=float(pos_data.get("filled_size_b", 0.0)),
                 hours_held=int(pos_data["hours_held"]),
                 funding_paid=float(pos_data.get("funding_paid", 0.0)),
             )

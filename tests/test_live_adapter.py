@@ -196,9 +196,17 @@ def test_get_fill_prices_long_ratio_places_correct_legs():
     client.queue("userFills", [{"oid": 222, "px": "100.01", "sz": "500.0"}])
 
     adapter = _make_adapter(client)
-    fa, fb = adapter.get_fill_prices(PairConfig("LINK", "SOL"), Direction.LONG_RATIO, 50_000.0)
+    fa, fb, sa, sb = adapter.get_fill_prices(
+        PairConfig("LINK", "SOL"), Direction.LONG_RATIO, 50_000.0
+    )
     assert fa == pytest.approx(10.005)
     assert fb == pytest.approx(100.01)
+    # Returned sizes are the rounded values actually sent to HL (the runner
+    # persists these on the position so the close uses the same numbers).
+    # Mid_LINK = (10.0+10.02)/2 = 10.01; size = 50000/10.01 = 4995.005 → 4995.0 (sz=1)
+    # Mid_SOL  = (100.0+100.04)/2 = 100.02; size = 50000/100.02 = 499.90 → 499.90 (sz=2)
+    assert sa == pytest.approx(4995.0)
+    assert sb == pytest.approx(499.90)
 
     # LINK leg should be a buy, SOL leg a sell (LONG_RATIO = long A, short B)
     order_calls = [
@@ -231,7 +239,11 @@ def test_get_fill_prices_close_inverts_legs_and_sets_reduce_only():
 
     adapter = _make_adapter(client)
     adapter.get_fill_prices(
-        PairConfig("LINK", "SOL"), Direction.SHORT_RATIO, 50_000.0, is_close=True
+        PairConfig("LINK", "SOL"),
+        Direction.SHORT_RATIO,
+        50_000.0,
+        is_close=True,
+        close_sizes=(5000.0, 500.0),
     )
 
     order_calls = [
@@ -242,10 +254,63 @@ def test_get_fill_prices_close_inverts_legs_and_sets_reduce_only():
     # SHORT_RATIO entry would be: sell A, buy B. Closing it inverts: buy A, sell B.
     leg_a = order_calls[0]["json"]["action"]["orders"][0]
     leg_b = order_calls[1]["json"]["action"]["orders"][0]
-    assert leg_a["b"] is True   # buy LINK to close prior short
+    assert leg_a["b"] is True  # buy LINK to close prior short
     assert leg_b["b"] is False  # sell SOL to close prior long
-    assert leg_a["r"] is True   # reduceOnly
+    assert leg_a["r"] is True  # reduceOnly
     assert leg_b["r"] is True
+
+
+def test_close_uses_explicit_close_sizes_verbatim():
+    """Regression: closes must size from close_sizes, not from notional/mid.
+
+    On a $25/leg AVAX leg with szDecimals=2, entry mid 9.10 rounds to 2.75
+    AVAX, exit mid 9.20 rounds to 2.72. ReduceOnly clamps to 2.72, leaving
+    0.03 AVAX (~$0.28) residual. Pinning that close_sizes wins guarantees
+    the exact entry size is sent regardless of mid drift.
+    """
+    client = _MockClient()
+    client.queue("meta", _meta_payload())
+    client.queue("exchange:updateLeverage", {"status": "ok"})
+    client.queue("exchange:updateLeverage", {"status": "ok"})
+    # Mids drifted between entry and exit — close must NOT recompute from these.
+    client.queue("l2Book:LINK", {"levels": [[{"px": "10.5"}], [{"px": "10.52"}]]})
+    client.queue("l2Book:SOL", {"levels": [[{"px": "105.0"}], [{"px": "105.04"}]]})
+    client.queue("exchange:order", _ok_status(111))
+    client.queue("exchange:order", _ok_status(222))
+    client.queue("userFills", [{"oid": 111, "px": "10.51", "sz": "5000.0"}])
+    client.queue("userFills", [{"oid": 222, "px": "105.02", "sz": "500.0"}])
+
+    adapter = _make_adapter(client)
+    # Entry-time sizes (different from what 50000/current_mid would give).
+    adapter.get_fill_prices(
+        PairConfig("LINK", "SOL"),
+        Direction.LONG_RATIO,
+        50_000.0,
+        is_close=True,
+        close_sizes=(5000.0, 500.0),
+    )
+
+    order_calls = [
+        c
+        for c in client.calls
+        if "/exchange" in c["url"] and c["json"]["action"]["type"] == "order"
+    ]
+    leg_a = order_calls[0]["json"]["action"]["orders"][0]
+    leg_b = order_calls[1]["json"]["action"]["orders"][0]
+    assert float(leg_a["s"]) == pytest.approx(5000.0)
+    assert float(leg_b["s"]) == pytest.approx(500.0)
+
+
+def test_close_without_close_sizes_raises():
+    """Closes must always pass close_sizes — the runner reads them from the
+    open position. Calling without is a programming error."""
+    client = _MockClient()
+    client.queue("meta", _meta_payload())
+    adapter = _make_adapter(client)
+    with pytest.raises(ExecutionError, match="close requires close_sizes"):
+        adapter.get_fill_prices(
+            PairConfig("LINK", "SOL"), Direction.LONG_RATIO, 50_000.0, is_close=True
+        )
 
 
 def test_get_fill_prices_open_keeps_reduce_only_false():

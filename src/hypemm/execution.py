@@ -88,18 +88,24 @@ class ExecutionAdapter(Protocol):
         notional_per_leg: float,
         *,
         is_close: bool = False,
-    ) -> tuple[float, float]:
-        """Get fill prices for a trade.
+        close_sizes: tuple[float, float] | None = None,
+    ) -> tuple[float, float, float, float]:
+        """Get fill prices and sizes for a trade.
 
         `direction` is always the ENTRY direction of the position. When
         is_close=True the adapter inverts each leg and (for live) sets
         reduceOnly so the order closes the existing position instead of
         opening a fresh same-direction one.
 
+        `close_sizes` is required when is_close=True: the runner must pass
+        the exact (size_a, size_b) that were filled at entry, so the close
+        clears the full position rather than leaving a residual sliver due
+        to szDecimals rounding at a different mid.
+
         For paper: returns current mid prices from the API.
         For live: places orders and returns actual fills.
 
-        Returns (fill_price_a, fill_price_b).
+        Returns (fill_price_a, fill_price_b, filled_size_a, filled_size_b).
         """
         ...
 
@@ -127,14 +133,22 @@ class PaperExecutionAdapter:
         notional_per_leg: float,
         *,
         is_close: bool = False,
-    ) -> tuple[float, float]:
-        """Walk the L2 book on each leg and return the realized VWAP."""
+        close_sizes: tuple[float, float] | None = None,
+    ) -> tuple[float, float, float, float]:
+        """Walk the L2 book on each leg and return the realized VWAP and size."""
         is_buy_a = direction == Direction.LONG_RATIO
         if is_close:
             is_buy_a = not is_buy_a
         is_buy_b = not is_buy_a
         fa = book_vwap(self.client, self.rest_url, pair.coin_a, is_buy_a, notional_per_leg)
         fb = book_vwap(self.client, self.rest_url, pair.coin_b, is_buy_b, notional_per_leg)
+        # Paper has no szDecimals rounding, so notional/vwap is the exact size.
+        # On close, mirror the live contract by honoring close_sizes verbatim.
+        if is_close and close_sizes is not None:
+            sa, sb = close_sizes
+        else:
+            sa = notional_per_leg / fa.vwap
+            sb = notional_per_leg / fb.vwap
         logger.info(
             "Paper fill %s %s%s: %s slip=%.2fbps, %s slip=%.2fbps",
             pair.label,
@@ -145,7 +159,7 @@ class PaperExecutionAdapter:
             pair.coin_b,
             fb.slippage_bps,
         )
-        return fa.vwap, fb.vwap
+        return fa.vwap, fb.vwap, sa, sb
 
     def fetch_mid(self, coin: str) -> float:
         """Fetch the current mid price for a coin."""
@@ -267,8 +281,9 @@ class LiveExecutionAdapter:
         notional_per_leg: float,
         *,
         is_close: bool = False,
-    ) -> tuple[float, float]:
-        """Place IoC orders for both legs and return realized VWAP fill prices.
+        close_sizes: tuple[float, float] | None = None,
+    ) -> tuple[float, float, float, float]:
+        """Place IoC orders for both legs and return fills + actual sizes.
 
         `direction` is the ENTRY direction (LONG_RATIO = long A, short B;
         SHORT_RATIO = short A, long B). When is_close=True both legs are
@@ -276,9 +291,20 @@ class LiveExecutionAdapter:
         position rather than opening a same-direction add — without this,
         an exit places another entry and doubles the position.
 
+        On entry, size = notional / mid rounded to szDecimals. The rounded
+        size is what HL fills, and is what the runner must persist on the
+        position so that `close_sizes` on exit matches exactly. Recomputing
+        size from notional/mid at exit time would round to a different value
+        whenever the price has moved, leaving a residual sliver under reduceOnly.
+
         Aborts (raises ExecutionError) if any leg fails to fill within
         fill_timeout_seconds, or if the realized fill exceeds max_slippage_bps.
+
+        Returns (fill_price_a, fill_price_b, filled_size_a, filled_size_b).
         """
+        if is_close and close_sizes is None:
+            raise ExecutionError("close requires close_sizes from the open position")
+
         meta = self._ensure_meta()
         for coin in (pair.coin_a, pair.coin_b):
             if coin not in meta:
@@ -297,47 +323,52 @@ class LiveExecutionAdapter:
 
         mid_a = self.fetch_mid(pair.coin_a)
         mid_b = self.fetch_mid(pair.coin_b)
-        size_a = notional_per_leg / mid_a
-        size_b = notional_per_leg / mid_b
 
-        # Pre-flight: HL rejects orders below $10 notional. We round size to
-        # szDecimals before placing, so check the post-rounding order value.
-        # Better to reject both legs cleanly than fill leg A and orphan it.
         from hypemm.hl_meta import round_size
 
-        rounded_a = round_size(size_a, meta[pair.coin_a].sz_decimals)
-        rounded_b = round_size(size_b, meta[pair.coin_b].sz_decimals)
-        for coin, rounded, mid in (
-            (pair.coin_a, rounded_a, mid_a),
-            (pair.coin_b, rounded_b, mid_b),
-        ):
-            if rounded * mid < 10.0:
-                raise ExecutionError(
-                    f"{coin} order value {rounded * mid:.2f} below HL $10 minimum "
-                    f"(notional {notional_per_leg}, size {rounded}, mid {mid:.6f})"
-                )
+        if is_close and close_sizes is not None:
+            # Close the exact entry sizes — already szDecimals-rounded at entry.
+            rounded_a, rounded_b = close_sizes
+        else:
+            size_a = notional_per_leg / mid_a
+            size_b = notional_per_leg / mid_b
+            rounded_a = round_size(size_a, meta[pair.coin_a].sz_decimals)
+            rounded_b = round_size(size_b, meta[pair.coin_b].sz_decimals)
+            # Pre-flight: HL rejects orders below $10 notional. Better to
+            # reject both legs cleanly than fill leg A and orphan it. Skip on
+            # closes — we must close whatever size we opened, and the entry
+            # already passed this gate.
+            for coin, rounded, mid in (
+                (pair.coin_a, rounded_a, mid_a),
+                (pair.coin_b, rounded_b, mid_b),
+            ):
+                if rounded * mid < 10.0:
+                    raise ExecutionError(
+                        f"{coin} order value {rounded * mid:.2f} below HL $10 minimum "
+                        f"(notional {notional_per_leg}, size {rounded}, mid {mid:.6f})"
+                    )
 
         order_id_a = self._place_ioc(
-            meta[pair.coin_a], is_buy_a, size_a, mid_a, reduce_only=is_close
+            meta[pair.coin_a], is_buy_a, rounded_a, mid_a, reduce_only=is_close
         )
         # If leg B fails AFTER leg A filled, we MUST flatten leg A to avoid an
         # unhedged position. Try-block scopes that recovery; failures inside
         # are logged but the original error is what propagates.
         try:
             order_id_b = self._place_ioc(
-                meta[pair.coin_b], is_buy_b, size_b, mid_b, reduce_only=is_close
+                meta[pair.coin_b], is_buy_b, rounded_b, mid_b, reduce_only=is_close
             )
             fill_a = self._await_fill(pair.coin_a, order_id_a)
             fill_b = self._await_fill(pair.coin_b, order_id_b)
         except ExecutionError as e:
             logger.error("Leg B failed (%s) — attempting to flatten leg A", e)
-            self._flatten_position(meta[pair.coin_a], is_buy_a, size_a, mid_a)
+            self._flatten_position(meta[pair.coin_a], is_buy_a, rounded_a, mid_a)
             raise
 
         self._check_slippage(pair.coin_a, fill_a, mid_a)
         self._check_slippage(pair.coin_b, fill_b, mid_b)
 
-        return fill_a, fill_b
+        return fill_a, fill_b, rounded_a, rounded_b
 
     def _flatten_position(
         self, asset: AssetMeta, was_buy: bool, size: float, mid_price: float

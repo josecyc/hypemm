@@ -200,18 +200,30 @@ def _run_loop(
                 # and is re-attempted on the next hour boundary.
                 try:
                     if isinstance(order, EntryOrder):
-                        fa, fb = adapter.get_fill_prices(
+                        fa, fb, sa, sb = adapter.get_fill_prices(
                             order.pair, order.direction, config.notional_per_leg
                         )
-                        engine.confirm_entry(order, fa, fb, now_ms)
+                        engine.confirm_entry(order, fa, fb, now_ms, sa, sb)
                     elif isinstance(order, ExitOrder):
-                        fa, fb = adapter.get_fill_prices(
-                            order.pair,
-                            order.position.direction,
+                        pos = order.position
+                        if pos.filled_size_a == 0.0 or pos.filled_size_b == 0.0:
+                            # Pre-fix position: no recorded sizes. Refuse to close
+                            # rather than recompute from notional/mid (which is the
+                            # original residual-leaving bug). Operator must flatten
+                            # manually and clear engine state.
+                            raise ExecutionError(
+                                f"{pos.pair.label} has no recorded fill sizes — "
+                                "predates the size-persistence fix; flatten on the "
+                                "exchange and restart with --fresh"
+                            )
+                        fa, fb, _, _ = adapter.get_fill_prices(
+                            pos.pair,
+                            pos.direction,
                             config.notional_per_leg,
                             is_close=True,
+                            close_sizes=(pos.filled_size_a, pos.filled_size_b),
                         )
-                        accrued = order.position.funding_paid
+                        accrued = pos.funding_paid
                         trade = engine.confirm_exit(order, fa, fb, now_ms)
                         if accrued != 0.0:
                             trade = replace(

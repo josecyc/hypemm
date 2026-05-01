@@ -67,6 +67,11 @@ class OpenPosition:
     entry_price_b: float
     entry_time_ms: int
     entry_correlation: float
+    # Actual filled sizes (post szDecimals rounding for live). Closes must use
+    # these exact numbers — recomputing from notional/mid leaves a residual
+    # whenever the price has moved between entry and exit.
+    filled_size_a: float = 0.0
+    filled_size_b: float = 0.0
     hours_held: int = 0
     funding_paid: float = 0.0
 
