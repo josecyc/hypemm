@@ -120,7 +120,7 @@ def _format_value(name: str, v: float) -> str:
         return f"{v:.0%}"
     if name == "correlation_drift":
         return f"{v:.2f}"
-    return f"${v:+,.0f}"
+    return f"${v:+,.3f}"
 
 
 def _build_signals_table(
@@ -204,7 +204,7 @@ def build_trades_log_table(
                 f"{tr.entry_z:+.2f}",
                 f"{tr.exit_z:+.2f}",
                 f"{tr.entry_correlation:.2f}",
-                f"[{nc}]${tr.net_pnl:+,.0f}[/{nc}]",
+                f"[{nc}]${tr.net_pnl:+,.3f}[/{nc}]",
                 str(tr.exit_reason),
             ]
         )
@@ -270,22 +270,22 @@ def _build_summary(
 
     lines = [
         f"Trades: {n}  WR: {wr}  "
-        f"Realized: [{rc}]${total_realized:+,.0f}[/{rc}]  "
-        f"Unrealized: [{uc}]${total_unrealized:+,.0f}[/{uc}]  "
-        f"Total: [{tc} bold]${total_pnl:+,.0f}[/{tc} bold]",
+        f"Realized: [{rc}]${total_realized:+,.3f}[/{rc}]  "
+        f"Unrealized: [{uc}]${total_unrealized:+,.3f}[/{uc}]  "
+        f"Total: [{tc} bold]${total_pnl:+,.3f}[/{tc} bold]",
         f"Runtime: {runtime_days:.1f}d  "
-        f"Daily rate: [{drc}]${daily_rate:+,.0f}/day[/{drc}]  "
-        f"Projected annual: [{pac}]${projected_annual:+,.0f}[/{pac}]  "
+        f"Daily rate: [{drc}]${daily_rate:+,.3f}/day[/{drc}]  "
+        f"Projected annual: [{pac}]${projected_annual:+,.3f}[/{pac}]  "
         f"APR (5x): [{pac}]{apr_5x:+.0f}%[/{pac}]",
     ]
     if baseline is not None:
         lines.extend(_baseline_lines(baseline, n, live_wr_pct, daily_rate))
     lines.extend(
         [
-            f"Notional/leg: ${config.notional_per_leg:,.0f}  "
+            f"Notional/leg: ${config.notional_per_leg:,.3f}  "
             f"Open: {open_positions}/{max_pairs} pairs  "
-            f"Exposure: ${exposure:,.0f} / ${max_exposure:,.0f}  "
-            f"Margin (5x): ${margin_5x:,.0f} / ${max_margin_5x:,.0f}",
+            f"Exposure: ${exposure:,.3f} / ${max_exposure:,.3f}  "
+            f"Margin (5x): ${margin_5x:,.3f} / ${max_margin_5x:,.3f}",
             f"[dim]Bars: {n_bars} │ {last_seen} │ " f"Polling every {poll_interval_sec}s[/dim]",
         ]
     )
@@ -305,10 +305,10 @@ def _baseline_lines(
         f"[cyan]Backtest baseline[/cyan] [dim]({baseline.date_range}, "
         f"{baseline.n_days}d):[/dim]  "
         f"WR [cyan]{baseline.win_rate_pct:.0f}%[/cyan]  "
-        f"Daily [cyan]${baseline.daily_net:+,.0f}/day[/cyan]  "
+        f"Daily [cyan]${baseline.daily_net:+,.3f}/day[/cyan]  "
         f"Trades/day [cyan]{baseline.trades_per_day:.1f}[/cyan]  "
         f"Sharpe [cyan]{baseline.sharpe:.2f}[/cyan]  "
-        f"Max DD [cyan]${baseline.max_drawdown:,.0f}[/cyan]"
+        f"Max DD [cyan]${baseline.max_drawdown:,.3f}[/cyan]"
     )
     if live_trades < 10:
         # Below ~10 trades the live numbers are too noisy for the delta to
@@ -327,7 +327,7 @@ def _baseline_lines(
         ref,
         f"[dim]vs baseline:[/dim]  "
         f"WR [{wrc}]{wr_delta:+.0f}pp[/{wrc}]  "
-        f"Daily [{drc}]${daily_delta:+,.0f}/day[/{drc}]",
+        f"Daily [{drc}]${daily_delta:+,.3f}/day[/{drc}]",
     ]
 
 
@@ -380,7 +380,7 @@ def _format_position(
     if sig:
         upnl = compute_unrealized_pnl(pos, sig.price_a, sig.price_b, config.notional_per_leg)
         c = "green" if upnl > 0 else "red"
-        pnl_str = f"[{c}]${upnl:+,.0f}[/{c}]"
+        pnl_str = f"[{c}]${upnl:+,.3f}[/{c}]"
     else:
         pnl_str = "[dim]---[/dim]"
 
