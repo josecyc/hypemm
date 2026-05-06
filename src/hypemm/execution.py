@@ -11,9 +11,17 @@ from typing import Any, Protocol
 
 import httpx
 
+from hypemm.accounting import fee_for_fill
 from hypemm.hl_meta import AssetMeta, fetch_asset_meta, format_price, format_size, round_price
 from hypemm.hl_sign import sign_l1_action
-from hypemm.models import ConfigurationError, DataFetchError, Direction, HypeMMError, PairConfig
+from hypemm.models import (
+    ConfigurationError,
+    DataFetchError,
+    Direction,
+    FillReport,
+    HypeMMError,
+    PairConfig,
+)
 from hypemm.orderbook import book_vwap
 
 logger = logging.getLogger(__name__)
@@ -76,6 +84,7 @@ class ExecutionAdapter(Protocol):
 
     client: httpx.Client
     rest_url: str
+    taker_fee_bps: float
 
     def fetch_mid(self, coin: str) -> float:
         """Return the current mid price for a coin."""
@@ -89,23 +98,21 @@ class ExecutionAdapter(Protocol):
         *,
         is_close: bool = False,
         close_sizes: tuple[float, float] | None = None,
-    ) -> tuple[float, float, float, float]:
-        """Get fill prices and sizes for a trade.
+    ) -> FillReport:
+        """Execute both legs and return a FillReport.
 
-        `direction` is always the ENTRY direction of the position. When
-        is_close=True the adapter inverts each leg and (for live) sets
-        reduceOnly so the order closes the existing position instead of
-        opening a fresh same-direction one.
+        `direction` is always the ENTRY direction. When is_close=True the
+        adapter inverts each leg and (for live) sets reduceOnly so the order
+        closes the existing position rather than opening a same-direction add.
 
-        `close_sizes` is required when is_close=True: the runner must pass
-        the exact (size_a, size_b) that were filled at entry, so the close
-        clears the full position rather than leaving a residual sliver due
-        to szDecimals rounding at a different mid.
+        `close_sizes` is required when is_close=True: the runner passes the
+        exact (size_a, size_b) that were filled at entry so the close clears
+        the full position with no residual under szDecimals rounding.
 
-        For paper: returns current mid prices from the API.
-        For live: places orders and returns actual fills.
-
-        Returns (fill_price_a, fill_price_b, filled_size_a, filled_size_b).
+        FillReport.fee_a/b are the modeled fees (taker_fee_bps × fill notional)
+        — same formula in paper and live, which is what makes backtest≡live
+        possible. *_actual fields carry the HL-billed amount on live and
+        duplicate the modeled values otherwise.
         """
         ...
 
@@ -120,10 +127,15 @@ class PaperExecutionAdapter:
     Fills at the realized VWAP for the configured notional, NOT mid. This
     means paper P&L includes the spread-crossing cost the live runner would
     pay — same model, no separate slippage calibration needed.
+
+    Fees are computed via `fee_for_fill(price, size, taker_fee_bps)` — same
+    function the live and backtest paths use, so a paper run and a backtest
+    against the same fills produce byte-identical CSV rows.
     """
 
-    def __init__(self, rest_url: str) -> None:
+    def __init__(self, rest_url: str, *, taker_fee_bps: float = 4.5) -> None:
         self.rest_url = rest_url
+        self.taker_fee_bps = taker_fee_bps
         self.client = httpx.Client(timeout=10)
 
     def get_fill_prices(
@@ -134,8 +146,8 @@ class PaperExecutionAdapter:
         *,
         is_close: bool = False,
         close_sizes: tuple[float, float] | None = None,
-    ) -> tuple[float, float, float, float]:
-        """Walk the L2 book on each leg and return the realized VWAP and size."""
+    ) -> FillReport:
+        """Walk the L2 book on each leg and return a FillReport."""
         is_buy_a = direction == Direction.LONG_RATIO
         if is_close:
             is_buy_a = not is_buy_a
@@ -149,6 +161,8 @@ class PaperExecutionAdapter:
         else:
             sa = notional_per_leg / fa.vwap
             sb = notional_per_leg / fb.vwap
+        fee_a = fee_for_fill(fa.vwap, sa, self.taker_fee_bps)
+        fee_b = fee_for_fill(fb.vwap, sb, self.taker_fee_bps)
         logger.info(
             "Paper fill %s %s%s: %s slip=%.2fbps, %s slip=%.2fbps",
             pair.label,
@@ -159,7 +173,18 @@ class PaperExecutionAdapter:
             pair.coin_b,
             fb.slippage_bps,
         )
-        return fa.vwap, fb.vwap, sa, sb
+        return FillReport(
+            price_a=fa.vwap,
+            price_b=fb.vwap,
+            size_a=sa,
+            size_b=sb,
+            fee_a=fee_a,
+            fee_b=fee_b,
+            fee_a_actual=fee_a,
+            fee_b_actual=fee_b,
+            oid_a=0,
+            oid_b=0,
+        )
 
     def fetch_mid(self, coin: str) -> float:
         """Fetch the current mid price for a coin."""
@@ -222,6 +247,7 @@ class LiveExecutionAdapter:
         ioc_aggression_bps: float = 10.0,
         fill_poll_seconds: float = 0.5,
         fill_timeout_seconds: float = 30.0,
+        taker_fee_bps: float = 4.5,
     ) -> None:
         from eth_account import Account
 
@@ -242,6 +268,7 @@ class LiveExecutionAdapter:
         self.ioc_aggression_bps = ioc_aggression_bps
         self.fill_poll_seconds = fill_poll_seconds
         self.fill_timeout_seconds = fill_timeout_seconds
+        self.taker_fee_bps = taker_fee_bps
         self.client = httpx.Client(timeout=10)
 
         self._meta: dict[str, AssetMeta] | None = None
@@ -282,8 +309,8 @@ class LiveExecutionAdapter:
         *,
         is_close: bool = False,
         close_sizes: tuple[float, float] | None = None,
-    ) -> tuple[float, float, float, float]:
-        """Place IoC orders for both legs and return fills + actual sizes.
+    ) -> FillReport:
+        """Place IoC orders for both legs and return a FillReport.
 
         `direction` is the ENTRY direction (LONG_RATIO = long A, short B;
         SHORT_RATIO = short A, long B). When is_close=True both legs are
@@ -300,7 +327,9 @@ class LiveExecutionAdapter:
         Aborts (raises ExecutionError) if any leg fails to fill within
         fill_timeout_seconds, or if the realized fill exceeds max_slippage_bps.
 
-        Returns (fill_price_a, fill_price_b, filled_size_a, filled_size_b).
+        FillReport.fee_a/b are the modeled fees so backtest and live use the
+        same number. fee_a_actual/fee_b_actual are summed from userFills.fee
+        for reconcile.
         """
         if is_close and close_sizes is None:
             raise ExecutionError("close requires close_sizes from the open position")
@@ -358,8 +387,8 @@ class LiveExecutionAdapter:
             order_id_b = self._place_ioc(
                 meta[pair.coin_b], is_buy_b, rounded_b, mid_b, reduce_only=is_close
             )
-            fill_a = self._await_fill(pair.coin_a, order_id_a)
-            fill_b = self._await_fill(pair.coin_b, order_id_b)
+            fill_a, actual_fee_a = self._await_fill(pair.coin_a, order_id_a)
+            fill_b, actual_fee_b = self._await_fill(pair.coin_b, order_id_b)
         except ExecutionError as e:
             logger.error("Leg B failed (%s) — attempting to flatten leg A", e)
             self._flatten_position(meta[pair.coin_a], is_buy_a, rounded_a, mid_a)
@@ -368,7 +397,25 @@ class LiveExecutionAdapter:
         self._check_slippage(pair.coin_a, fill_a, mid_a)
         self._check_slippage(pair.coin_b, fill_b, mid_b)
 
-        return fill_a, fill_b, rounded_a, rounded_b
+        # Modeled fees use the same fee_for_fill function as paper/backtest so
+        # the CSV's `cost`/`net_pnl` are computed identically across paths.
+        # Reconcile compares modeled to fee_*_actual to surface taker_fee_bps
+        # drift from the user's true HL tier.
+        modeled_fee_a = fee_for_fill(fill_a, rounded_a, self.taker_fee_bps)
+        modeled_fee_b = fee_for_fill(fill_b, rounded_b, self.taker_fee_bps)
+
+        return FillReport(
+            price_a=fill_a,
+            price_b=fill_b,
+            size_a=rounded_a,
+            size_b=rounded_b,
+            fee_a=modeled_fee_a,
+            fee_b=modeled_fee_b,
+            fee_a_actual=actual_fee_a,
+            fee_b_actual=actual_fee_b,
+            oid_a=order_id_a,
+            oid_b=order_id_b,
+        )
 
     def _flatten_position(
         self, asset: AssetMeta, was_buy: bool, size: float, mid_price: float
@@ -410,6 +457,11 @@ class LiveExecutionAdapter:
         )
         r.raise_for_status()
         return dict(r.json())
+
+    @property
+    def account_address(self) -> str:
+        """Account address used for HL queries (clearinghouseState, userFunding)."""
+        return self._account_address
 
     def close(self) -> None:
         self.client.close()
@@ -479,10 +531,11 @@ class LiveExecutionAdapter:
         except (KeyError, IndexError, ValueError) as e:
             raise ExecutionError(f"malformed order response: {resp!r} ({e})")
 
-    def _await_fill(self, coin: str, oid: int) -> float:
+    def _await_fill(self, coin: str, oid: int) -> tuple[float, float]:
         """Poll /info userFills for the given order until fully filled or timeout.
 
-        Returns the volume-weighted average fill price.
+        Returns (volume-weighted average fill price, total HL-billed fee).
+        Multi-level fills are aggregated: vwap weighted by size, fee summed.
         """
         deadline = time.monotonic() + self.fill_timeout_seconds
         target_oid = oid
@@ -499,7 +552,8 @@ class LiveExecutionAdapter:
                     total_sz = sum(float(f["sz"]) for f in matched)
                     if total_sz > 0:
                         vwap = sum(float(f["px"]) * float(f["sz"]) for f in matched) / total_sz
-                        return vwap
+                        total_fee = sum(float(f.get("fee", 0.0)) for f in matched)
+                        return vwap, total_fee
             time.sleep(self.fill_poll_seconds)
 
         raise ExecutionError(
@@ -533,6 +587,7 @@ def build_adapter(
     ioc_aggression_bps: float = 10.0,
     fill_poll_seconds: float = 0.5,
     fill_timeout_seconds: float = 30.0,
+    taker_fee_bps: float = 4.5,
 ) -> ExecutionAdapter:
     """Construct an execution adapter from app config.
 
@@ -549,5 +604,6 @@ def build_adapter(
             ioc_aggression_bps=ioc_aggression_bps,
             fill_poll_seconds=fill_poll_seconds,
             fill_timeout_seconds=fill_timeout_seconds,
+            taker_fee_bps=taker_fee_bps,
         )
-    return PaperExecutionAdapter(rest_url)
+    return PaperExecutionAdapter(rest_url, taker_fee_bps=taker_fee_bps)

@@ -2,9 +2,19 @@
 
 from __future__ import annotations
 
+import pytest
+
 from hypemm.config import StrategyConfig
 from hypemm.engine import StrategyEngine
-from hypemm.models import Direction, EntryOrder, ExitOrder, ExitReason, PairConfig, Signal
+from hypemm.models import (
+    Direction,
+    EntryOrder,
+    ExitOrder,
+    ExitReason,
+    FillReport,
+    PairConfig,
+    Signal,
+)
 
 
 def _make_signal(
@@ -22,6 +32,18 @@ def _make_signal(
         price_b=price_b,
         timestamp_ms=0,
         n_bars=100,
+    )
+
+
+def _fill(price_a: float, price_b: float) -> FillReport:
+    """Build a FillReport for tests that only care about prices."""
+    return FillReport(
+        price_a=price_a,
+        price_b=price_b,
+        size_a=1.0,
+        size_b=1.0,
+        fee_a=0.0,
+        fee_b=0.0,
     )
 
 
@@ -80,7 +102,7 @@ class TestExitLogic:
 
         entry_sig = _make_signal(pair, z=-2.5, corr=0.9, price_a=15.0, price_b=150.0)
         orders = engine.process_bar({pair.label: entry_sig}, timestamp_ms=1000)
-        engine.confirm_entry(orders[0], 15.0, 150.0, 1000)  # type: ignore[arg-type]
+        engine.confirm_entry(orders[0], _fill(15.0, 150.0), 1000)
 
         exit_sig = _make_signal(pair, z=-0.3, corr=0.9, price_a=16.0, price_b=149.0)
         orders = engine.process_bar({pair.label: exit_sig}, timestamp_ms=2000)
@@ -95,7 +117,7 @@ class TestExitLogic:
 
         entry_sig = _make_signal(pair, z=2.5, corr=0.9, price_a=15.0, price_b=150.0)
         orders = engine.process_bar({pair.label: entry_sig}, timestamp_ms=1000)
-        engine.confirm_entry(orders[0], 15.0, 150.0, 1000)  # type: ignore[arg-type]
+        engine.confirm_entry(orders[0], _fill(15.0, 150.0), 1000)
 
         exit_sig = _make_signal(pair, z=0.3, corr=0.9, price_a=14.0, price_b=151.0)
         orders = engine.process_bar({pair.label: exit_sig}, timestamp_ms=2000)
@@ -110,7 +132,7 @@ class TestExitLogic:
 
         entry_sig = _make_signal(pair, z=-2.5, corr=0.9)
         orders = engine.process_bar({pair.label: entry_sig}, timestamp_ms=1000)
-        engine.confirm_entry(orders[0], 15.0, 150.0, 1000)  # type: ignore[arg-type]
+        engine.confirm_entry(orders[0], _fill(15.0, 150.0), 1000)
 
         hold_sig = _make_signal(pair, z=-0.6)
         orders = engine.process_bar({pair.label: hold_sig}, timestamp_ms=2000)
@@ -124,7 +146,7 @@ class TestExitLogic:
 
         entry_sig = _make_signal(pair, z=-2.5, corr=0.9)
         orders = engine.process_bar({pair.label: entry_sig}, timestamp_ms=1000)
-        engine.confirm_entry(orders[0], 15.0, 150.0, 1000)  # type: ignore[arg-type]
+        engine.confirm_entry(orders[0], _fill(15.0, 150.0), 1000)
 
         stop_sig = _make_signal(pair, z=4.5)
         orders = engine.process_bar({pair.label: stop_sig}, timestamp_ms=2000)
@@ -139,7 +161,7 @@ class TestExitLogic:
 
         entry_sig = _make_signal(pair, z=-2.5, corr=0.9)
         orders = engine.process_bar({pair.label: entry_sig}, timestamp_ms=1000)
-        engine.confirm_entry(orders[0], 15.0, 150.0, 1000)  # type: ignore[arg-type]
+        engine.confirm_entry(orders[0], _fill(15.0, 150.0), 1000)
 
         for i in range(3):
             hold_sig = _make_signal(pair, z=-1.5)
@@ -159,11 +181,11 @@ class TestCooldown:
 
         entry_sig = _make_signal(pair, z=-2.5, corr=0.9)
         orders = engine.process_bar({pair.label: entry_sig}, timestamp_ms=1000)
-        engine.confirm_entry(orders[0], 15.0, 150.0, 1000)  # type: ignore[arg-type]
+        engine.confirm_entry(orders[0], _fill(15.0, 150.0), 1000)
 
         exit_sig = _make_signal(pair, z=-0.3, corr=0.9)
         orders = engine.process_bar({pair.label: exit_sig}, timestamp_ms=2000)
-        engine.confirm_exit(orders[0], 16.0, 149.0, 2000)  # type: ignore[arg-type]
+        engine.confirm_exit(orders[0], _fill(16.0, 149.0), 2000)
 
         re_entry_sig = _make_signal(pair, z=-2.5, corr=0.9)
         orders = engine.process_bar({pair.label: re_entry_sig}, timestamp_ms=3000)
@@ -183,7 +205,7 @@ class TestConfirmFills:
 
         entry_sig = _make_signal(pair, z=-2.5, corr=0.85)
         orders = engine.process_bar({pair.label: entry_sig}, timestamp_ms=1000)
-        pos = engine.confirm_entry(orders[0], 15.0, 150.0, 1000)  # type: ignore[arg-type]
+        pos = engine.confirm_entry(orders[0], _fill(15.0, 150.0), 1000)
 
         assert pos.pair == pair
         assert pos.direction == Direction.LONG_RATIO
@@ -195,16 +217,26 @@ class TestConfirmFills:
 
         entry_sig = _make_signal(pair, z=-2.5, corr=0.85, price_a=15.0, price_b=150.0)
         orders = engine.process_bar({pair.label: entry_sig}, timestamp_ms=1000)
-        engine.confirm_entry(orders[0], 15.0, 150.0, 1000)  # type: ignore[arg-type]
+        # Non-zero fees on the entry leg so the cost-deduction assertion
+        # exercises the new FillReport-driven cost computation.
+        entry_fill = FillReport(
+            price_a=15.0, price_b=150.0, size_a=1.0, size_b=1.0, fee_a=0.5, fee_b=0.5
+        )
+        engine.confirm_entry(orders[0], entry_fill, 1000)
 
         exit_sig = _make_signal(pair, z=-0.3, corr=0.85, price_a=16.0, price_b=149.0)
         orders = engine.process_bar({pair.label: exit_sig}, timestamp_ms=2000)
-        trade = engine.confirm_exit(orders[0], 16.0, 149.0, 2000)  # type: ignore[arg-type]
+        exit_fill = FillReport(
+            price_a=16.0, price_b=149.0, size_a=1.0, size_b=1.0, fee_a=0.5, fee_b=0.5
+        )
+        trade = engine.confirm_exit(orders[0], exit_fill, 2000)
 
         assert trade.pair_label == "LINK/SOL"
         assert trade.direction == Direction.LONG_RATIO
         assert trade.exit_reason == ExitReason.MEAN_REVERT
-        assert trade.net_pnl < trade.gross_pnl  # cost deducted
+        # cost = sum of the four leg fees → net_pnl = gross_pnl − 2.0
+        assert trade.cost == pytest.approx(2.0)
+        assert trade.net_pnl == pytest.approx(trade.gross_pnl - 2.0)
         assert engine.positions[pair.label] is None
 
 
@@ -215,7 +247,7 @@ class TestStatePersistence:
 
         entry_sig = _make_signal(pair, z=-2.5, corr=0.85)
         orders = engine.process_bar({pair.label: entry_sig}, timestamp_ms=1000)
-        engine.confirm_entry(orders[0], 15.0, 150.0, 1000)  # type: ignore[arg-type]
+        engine.confirm_entry(orders[0], _fill(15.0, 150.0), 1000)
 
         state = engine.get_state()
 
@@ -234,7 +266,7 @@ class TestStatePersistence:
 
         entry_sig = _make_signal(pair, z=-2.5, corr=0.85)
         orders = engine.process_bar({pair.label: entry_sig}, timestamp_ms=1000)
-        pos = engine.confirm_entry(orders[0], 15.0, 150.0, 1000)  # type: ignore[arg-type]
+        pos = engine.confirm_entry(orders[0], _fill(15.0, 150.0), 1000)
         pos.funding_paid = 12.34
 
         state = engine.get_state()

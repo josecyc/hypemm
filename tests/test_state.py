@@ -8,7 +8,7 @@ import pytest
 
 from hypemm.config import StrategyConfig
 from hypemm.engine import StrategyEngine
-from hypemm.models import Direction, PairConfig, Signal, StateCorruptionError
+from hypemm.models import Direction, FillReport, PairConfig, Signal, StateCorruptionError
 from hypemm.persistence import load_state, save_state
 
 
@@ -31,7 +31,8 @@ def test_save_and_load_round_trip(tmp_path: Path) -> None:
 
     sig = _make_signal(pair, z=-2.5)
     orders = engine.process_bar({pair.label: sig}, timestamp_ms=1000)
-    engine.confirm_entry(orders[0], 15.0, 150.0, 1000)  # type: ignore[arg-type]
+    fill = FillReport(price_a=15.0, price_b=150.0, size_a=1.0, size_b=1.0, fee_a=0.0, fee_b=0.0)
+    engine.confirm_entry(orders[0], fill, 1000)  # type: ignore[arg-type]
 
     state_path = tmp_path / "state.json"
     save_state(engine, state_path, start_time="2026-04-01T00:00:00")

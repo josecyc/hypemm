@@ -11,6 +11,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from hypemm.accounting import fee_for_fill
 from hypemm.config import GateConfig, StrategyConfig, SweepConfig
 from hypemm.engine import StrategyEngine
 from hypemm.funding import compute_funding_cost
@@ -27,6 +28,7 @@ from hypemm.models import (
     CompletedTrade,
     EntryOrder,
     ExitOrder,
+    FillReport,
     GateResult,
     PairConfig,
     Signal,
@@ -117,20 +119,42 @@ def run_backtest(
 
         for order in orders:
             if isinstance(order, EntryOrder):
-                engine.confirm_entry(order, float(pa[i]), float(pb[i]), ts_ms)
+                fill = _build_backtest_fill(
+                    float(pa[i]), float(pb[i]), config.notional_per_leg, config.taker_fee_bps
+                )
+                engine.confirm_entry(order, fill, ts_ms)
             elif isinstance(order, ExitOrder):
-                trade = engine.confirm_exit(order, float(pa[i]), float(pb[i]), ts_ms)
+                pos = order.position
+                exit_fill = _build_backtest_fill(
+                    float(pa[i]),
+                    float(pb[i]),
+                    config.notional_per_leg,
+                    config.taker_fee_bps,
+                    is_close=True,
+                    close_sizes=(pos.filled_size_a, pos.filled_size_b),
+                )
+                trade = engine.confirm_exit(order, exit_fill, ts_ms)
                 trade = _add_mae(trade, pa, pb, i, engine.config)
                 if funding_a is not None and funding_b is not None:
+                    prices_a = pd.Series(pa, index=timestamps)
+                    prices_b = pd.Series(pb, index=timestamps)
                     fc = compute_funding_cost(
                         trade.direction,
-                        config.notional_per_leg,
+                        trade.entry_size_a,
+                        trade.entry_size_b,
                         trade.entry_ts,
                         trade.exit_ts,
                         funding_a,
                         funding_b,
+                        prices_a,
+                        prices_b,
                     )
-                    trade = replace(trade, funding_cost=fc, net_pnl=trade.net_pnl - fc)
+                    trade = replace(
+                        trade,
+                        funding_cost=fc,
+                        funding_actual=fc,  # parity: backtest mirrors modeled into _actual
+                        net_pnl=trade.net_pnl - fc,
+                    )
                 if slippage_profile is not None:
                     # Per-pair slippage in $: each leg has 2 fills (entry+exit),
                     # so cost = 2 * notional * slip_bps / 10000 per leg.
@@ -145,6 +169,45 @@ def run_backtest(
                 completed.append(trade)
 
     return completed
+
+
+def _build_backtest_fill(
+    price_a: float,
+    price_b: float,
+    notional: float,
+    taker_fee_bps: float,
+    *,
+    is_close: bool = False,
+    close_sizes: tuple[float, float] | None = None,
+) -> FillReport:
+    """Construct a FillReport for the backtest's synthetic execution path.
+
+    Backtest has no szDecimals rounding, so size = notional / price. On close,
+    honor close_sizes verbatim — same contract as the live adapter — so exit
+    fees are computed on the size that was actually opened.
+
+    Modeled fees use the same `fee_for_fill` function as live; *_actual fields
+    duplicate the modeled values to keep schema uniform across paths.
+    """
+    if is_close and close_sizes is not None:
+        size_a, size_b = close_sizes
+    else:
+        size_a = notional / price_a
+        size_b = notional / price_b
+    fee_a = fee_for_fill(price_a, size_a, taker_fee_bps)
+    fee_b = fee_for_fill(price_b, size_b, taker_fee_bps)
+    return FillReport(
+        price_a=price_a,
+        price_b=price_b,
+        size_a=size_a,
+        size_b=size_b,
+        fee_a=fee_a,
+        fee_b=fee_b,
+        fee_a_actual=fee_a,
+        fee_b_actual=fee_b,
+        oid_a=0,
+        oid_b=0,
+    )
 
 
 def run_backtest_all_pairs(

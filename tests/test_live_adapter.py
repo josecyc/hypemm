@@ -196,17 +196,24 @@ def test_get_fill_prices_long_ratio_places_correct_legs():
     client.queue("userFills", [{"oid": 222, "px": "100.01", "sz": "500.0"}])
 
     adapter = _make_adapter(client)
-    fa, fb, sa, sb = adapter.get_fill_prices(
-        PairConfig("LINK", "SOL"), Direction.LONG_RATIO, 50_000.0
-    )
-    assert fa == pytest.approx(10.005)
-    assert fb == pytest.approx(100.01)
+    fill = adapter.get_fill_prices(PairConfig("LINK", "SOL"), Direction.LONG_RATIO, 50_000.0)
+    assert fill.price_a == pytest.approx(10.005)
+    assert fill.price_b == pytest.approx(100.01)
     # Returned sizes are the rounded values actually sent to HL (the runner
     # persists these on the position so the close uses the same numbers).
     # Mid_LINK = (10.0+10.02)/2 = 10.01; size = 50000/10.01 = 4995.005 → 4995.0 (sz=1)
     # Mid_SOL  = (100.0+100.04)/2 = 100.02; size = 50000/100.02 = 499.90 → 499.90 (sz=2)
-    assert sa == pytest.approx(4995.0)
-    assert sb == pytest.approx(499.90)
+    assert fill.size_a == pytest.approx(4995.0)
+    assert fill.size_b == pytest.approx(499.90)
+    # Modeled fees use fee_for_fill(price, size, taker_fee_bps).
+    # 4995 × 10.005 × 4.5/10000 = ~22.49; 499.90 × 100.01 × 4.5/10000 = ~22.50
+    assert fill.fee_a == pytest.approx(4995.0 * 10.005 * 4.5 / 10_000.0)
+    assert fill.fee_b == pytest.approx(499.90 * 100.01 * 4.5 / 10_000.0)
+    # Default mock fills don't carry a "fee" field → actual fees are zero.
+    assert fill.fee_a_actual == pytest.approx(0.0)
+    assert fill.fee_b_actual == pytest.approx(0.0)
+    assert fill.oid_a == 111
+    assert fill.oid_b == 222
 
     # LINK leg should be a buy, SOL leg a sell (LONG_RATIO = long A, short B)
     order_calls = [
@@ -311,6 +318,38 @@ def test_close_without_close_sizes_raises():
         adapter.get_fill_prices(
             PairConfig("LINK", "SOL"), Direction.LONG_RATIO, 50_000.0, is_close=True
         )
+
+
+def test_actual_fees_summed_across_multi_level_fills():
+    """A single IoC can match multiple resting orders → multiple userFills events.
+
+    The adapter must sum `fee` across all events for the oid (and weight px
+    by sz for the VWAP). Modeled fee uses the resulting VWAP × total size ×
+    taker_fee_bps, which should agree with the actual sum within rounding.
+    """
+    client = _MockClient()
+    client.queue("meta", _meta_payload())
+    client.queue("exchange:updateLeverage", {"status": "ok"})
+    client.queue("exchange:updateLeverage", {"status": "ok"})
+    client.queue("l2Book:LINK", {"levels": [[{"px": "10.0"}], [{"px": "10.02"}]]})
+    client.queue("l2Book:SOL", {"levels": [[{"px": "100.0"}], [{"px": "100.04"}]]})
+    client.queue("exchange:order", _ok_status(111))
+    client.queue("exchange:order", _ok_status(222))
+    # LINK leg fills in two slices at slightly different prices. fee per slice
+    # is what HL billed; total = 0.011 + 0.022 = 0.033.
+    client.queue(
+        "userFills",
+        [
+            {"oid": 111, "px": "10.005", "sz": "2000.0", "fee": "0.011"},
+            {"oid": 111, "px": "10.005", "sz": "3000.0", "fee": "0.022"},
+        ],
+    )
+    client.queue("userFills", [{"oid": 222, "px": "100.01", "sz": "500.0", "fee": "0.0225"}])
+
+    adapter = _make_adapter(client)
+    fill = adapter.get_fill_prices(PairConfig("LINK", "SOL"), Direction.LONG_RATIO, 50_000.0)
+    assert fill.fee_a_actual == pytest.approx(0.033)
+    assert fill.fee_b_actual == pytest.approx(0.0225)
 
 
 def test_get_fill_prices_open_keeps_reduce_only_false():

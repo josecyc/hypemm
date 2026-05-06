@@ -20,9 +20,14 @@ class StrategyConfig:
     max_hold_hours: int = 48
     stop_loss_z: float = 4.0
     notional_per_leg: float = 50_000
-    # cost_per_side_bps = HL maker fee (2 bps at our volume tier).
-    # Both fee and slippage compound across 4 sides per trade: leg-A entry,
-    # leg-A exit, leg-B entry, leg-B exit. round_trip_cost folds them in.
+    # taker_fee_bps = exchange fee per fill at our tier (HL retail = 4.5).
+    # IoC orders are 100% taker, so this is the only fee rate the runtime
+    # uses. Calibrate by running `hypemm reconcile-pnl` after live trading
+    # and matching the implied bps to actual userFills.fee data.
+    taker_fee_bps: float = 4.5
+    # cost_per_side_bps = legacy maker fee (2 bps). Only consumed by the
+    # `round_trip_cost` property which feeds backtest MAE; the per-trade
+    # fee accounting now uses `taker_fee_bps` per fill in both paths.
     cost_per_side_bps: float = 2.0
     # slippage_per_side_bps = simulated spread-crossing for backtest/paper.
     # Live runs ZERO this automatically (CLI does dataclass-replace) because

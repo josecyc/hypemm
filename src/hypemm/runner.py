@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import logging
 import time
-from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -19,7 +18,12 @@ from hypemm.config import AppConfig
 from hypemm.data import seed_price_buffer
 from hypemm.engine import StrategyEngine
 from hypemm.execution import ExecutionAdapter, ExecutionError, PaperExecutionAdapter
-from hypemm.funding import accrue_hourly_funding, fetch_latest_funding_rates
+from hypemm.funding import (
+    accrue_actual_funding,
+    accrue_hourly_funding,
+    fetch_latest_funding_rates,
+    fetch_user_funding,
+)
 from hypemm.models import (
     CompletedTrade,
     DataFetchError,
@@ -32,6 +36,7 @@ from hypemm.persistence import (
     load_trades,
     log_hourly_snapshot,
     log_trade,
+    migrate_trades_csv_if_stale,
     save_state,
     write_latest_snapshot,
 )
@@ -61,13 +66,19 @@ def run_paper_loop(
     engine = StrategyEngine(config)
     owns_adapter = adapter is None
     if adapter is None:
-        adapter = PaperExecutionAdapter(infra.rest_url)
+        adapter = PaperExecutionAdapter(infra.rest_url, taker_fee_bps=config.taker_fee_bps)
     state_path = infra.paper_trades_dir / "state.json"
     trades_path = infra.paper_trades_dir / "paper_trades.csv"
     snapshot_path = infra.paper_trades_dir / "hourly_snapshots.csv"
     latest_path = infra.paper_trades_dir / "latest_snapshot.csv"
     mode_path = infra.paper_trades_dir / "mode.txt"
     start_time = datetime.now(timezone.utc).isoformat()
+
+    # Detect a pre-accounting-overhaul trades.csv and archive it so the next
+    # log_trade call writes against a fresh header. Idempotent if already on
+    # the new schema. Run regardless of --fresh so a stale file doesn't get
+    # appended to even when state.json is reset.
+    migrate_trades_csv_if_stale(trades_path)
 
     completed_trades: list[CompletedTrade] = []
     if not fresh and state_path.exists():
@@ -193,17 +204,17 @@ def _run_loop(
             last_risk_status = risk_report.worst_status
 
         if hour_changed:
-            _accrue_funding(engine, adapter, config.all_coins, config.notional_per_leg)
+            _accrue_funding(engine, adapter, prices, config.all_coins)
             orders = engine.process_bar(signals, now_ms)
             for order in orders:
                 # A failed ExitOrder leaves the position open one more bar
                 # and is re-attempted on the next hour boundary.
                 try:
                     if isinstance(order, EntryOrder):
-                        fa, fb, sa, sb = adapter.get_fill_prices(
+                        fill = adapter.get_fill_prices(
                             order.pair, order.direction, config.notional_per_leg
                         )
-                        engine.confirm_entry(order, fa, fb, now_ms, sa, sb)
+                        engine.confirm_entry(order, fill, now_ms)
                     elif isinstance(order, ExitOrder):
                         pos = order.position
                         if pos.filled_size_a == 0.0 or pos.filled_size_b == 0.0:
@@ -216,21 +227,14 @@ def _run_loop(
                                 "predates the size-persistence fix; flatten on the "
                                 "exchange and restart with --fresh"
                             )
-                        fa, fb, _, _ = adapter.get_fill_prices(
+                        fill = adapter.get_fill_prices(
                             pos.pair,
                             pos.direction,
                             config.notional_per_leg,
                             is_close=True,
                             close_sizes=(pos.filled_size_a, pos.filled_size_b),
                         )
-                        accrued = pos.funding_paid
-                        trade = engine.confirm_exit(order, fa, fb, now_ms)
-                        if accrued != 0.0:
-                            trade = replace(
-                                trade,
-                                funding_cost=accrued,
-                                net_pnl=trade.net_pnl - accrued,
-                            )
+                        trade = engine.confirm_exit(order, fill, now_ms)
                         log_trade(trade, trades_path)
                         completed_trades.append(trade)
                 except ExecutionError as e:
@@ -262,15 +266,37 @@ def _log_risk_change(prev: RiskStatus, report: RiskReport) -> None:
 def _accrue_funding(
     engine: StrategyEngine,
     adapter: ExecutionAdapter,
+    marks: dict[str, float],
     coins: list[str],
-    notional: float,
 ) -> None:
-    """Fetch latest funding rates and accrue one hour on each open position."""
+    """Accrue one hour of MODELED funding to every open position, and on live
+    pull the past hour's userFunding events for the actual ledger.
+
+    Modeled funding uses the per-leg formula `signed_size × mark × rate`.
+    Actual funding (live only) reads userFunding deltas and apportions to
+    legs by signed-size share — exact by linearity, even with cross-pair
+    coin overlap.
+    """
     if not any(p is not None for p in engine.positions.values()):
         return
+    rest_url = adapter.rest_url
+    info_url = rest_url if rest_url.endswith("/info") else rest_url + "/info"
     try:
-        rates = fetch_latest_funding_rates(adapter.client, adapter.rest_url, coins)
+        rates = fetch_latest_funding_rates(adapter.client, info_url, coins)
     except HypeMMError as e:
         logger.warning("Funding accrual skipped: %s", e)
         return
-    accrue_hourly_funding(engine.positions, rates, notional)
+    accrue_hourly_funding(engine.positions, rates, marks)
+
+    # Live: read the actual HL ledger for the past hour and apportion.
+    account = getattr(adapter, "account_address", None)
+    if account is None:
+        return
+    now_ms = int(time.time() * 1000)
+    start_ms = now_ms - 3_600_000 - 60_000  # one-hour window with a 60s overlap buffer
+    try:
+        events = fetch_user_funding(adapter.client, info_url, account, start_ms)
+    except (HypeMMError, Exception) as e:  # noqa: BLE001 — keep runner alive on transient
+        logger.warning("Actual funding fetch failed: %s", e)
+        return
+    accrue_actual_funding(engine.positions, events)

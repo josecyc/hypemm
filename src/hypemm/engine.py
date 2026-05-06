@@ -15,6 +15,7 @@ from hypemm.models import (
     EntryOrder,
     ExitOrder,
     ExitReason,
+    FillReport,
     OpenPosition,
     PairConfig,
     Signal,
@@ -134,11 +135,8 @@ class StrategyEngine:
     def confirm_entry(
         self,
         order: EntryOrder,
-        fill_price_a: float,
-        fill_price_b: float,
+        fill: FillReport,
         timestamp_ms: int,
-        filled_size_a: float = 0.0,
-        filled_size_b: float = 0.0,
     ) -> OpenPosition:
         """Confirm an entry fill. Registers the position internally."""
         if self.config.corr_threshold >= 0 and order.signal.correlation is None:
@@ -148,12 +146,18 @@ class StrategyEngine:
             pair=order.pair,
             direction=order.direction,
             entry_z=order.signal.z_score,
-            entry_price_a=fill_price_a,
-            entry_price_b=fill_price_b,
+            entry_price_a=fill.price_a,
+            entry_price_b=fill.price_b,
             entry_time_ms=timestamp_ms,
             entry_correlation=corr,
-            filled_size_a=filled_size_a,
-            filled_size_b=filled_size_b,
+            filled_size_a=fill.size_a,
+            filled_size_b=fill.size_b,
+            entry_fee_a=fill.fee_a,
+            entry_fee_b=fill.fee_b,
+            entry_fee_a_actual=fill.fee_a_actual,
+            entry_fee_b_actual=fill.fee_b_actual,
+            entry_oid_a=fill.oid_a,
+            entry_oid_b=fill.oid_b,
         )
         self.positions[order.pair.label] = pos
         return pos
@@ -161,22 +165,28 @@ class StrategyEngine:
     def confirm_exit(
         self,
         order: ExitOrder,
-        fill_price_a: float,
-        fill_price_b: float,
+        fill: FillReport,
         timestamp_ms: int,
     ) -> CompletedTrade:
-        """Confirm an exit fill. Closes position and returns completed trade."""
+        """Confirm an exit fill. Closes position and returns completed trade.
+
+        `cost` is computed from the per-leg modeled fees recorded at entry +
+        the modeled fees on this fill. `funding_cost` is the modeled total
+        accumulated on the position. The *_actual fields are pass-throughs
+        for the reconcile report; they don't enter net_pnl.
+        """
         pos = order.position
         pnl_a, pnl_b = compute_leg_pnl(
             pos.direction,
             self.config.notional_per_leg,
             pos.entry_price_a,
             pos.entry_price_b,
-            fill_price_a,
-            fill_price_b,
+            fill.price_a,
+            fill.price_b,
         )
         gross = pnl_a + pnl_b
-        net = gross - self.config.round_trip_cost
+        cost = pos.entry_fee_a + pos.entry_fee_b + fill.fee_a + fill.fee_b
+        net = gross - cost - pos.funding_paid
 
         trade = CompletedTrade(
             pair_label=pos.pair.label,
@@ -188,15 +198,31 @@ class StrategyEngine:
             hours_held=pos.hours_held,
             entry_price_a=pos.entry_price_a,
             entry_price_b=pos.entry_price_b,
-            exit_price_a=fill_price_a,
-            exit_price_b=fill_price_b,
+            exit_price_a=fill.price_a,
+            exit_price_b=fill.price_b,
             pnl_leg_a=pnl_a,
             pnl_leg_b=pnl_b,
             gross_pnl=gross,
-            cost=self.config.round_trip_cost,
+            cost=cost,
             net_pnl=net,
             exit_reason=order.reason,
             entry_correlation=pos.entry_correlation,
+            funding_cost=pos.funding_paid,
+            entry_size_a=pos.filled_size_a,
+            entry_size_b=pos.filled_size_b,
+            entry_fee_a=pos.entry_fee_a,
+            entry_fee_b=pos.entry_fee_b,
+            exit_fee_a=fill.fee_a,
+            exit_fee_b=fill.fee_b,
+            entry_fee_a_actual=pos.entry_fee_a_actual,
+            entry_fee_b_actual=pos.entry_fee_b_actual,
+            exit_fee_a_actual=fill.fee_a_actual,
+            exit_fee_b_actual=fill.fee_b_actual,
+            funding_actual=pos.funding_paid_actual,
+            entry_oid_a=pos.entry_oid_a,
+            entry_oid_b=pos.entry_oid_b,
+            exit_oid_a=fill.oid_a,
+            exit_oid_b=fill.oid_b,
         )
 
         self.positions[pos.pair.label] = None
@@ -221,6 +247,13 @@ class StrategyEngine:
                     "filled_size_b": pos.filled_size_b,
                     "hours_held": pos.hours_held,
                     "funding_paid": pos.funding_paid,
+                    "funding_paid_actual": pos.funding_paid_actual,
+                    "entry_fee_a": pos.entry_fee_a,
+                    "entry_fee_b": pos.entry_fee_b,
+                    "entry_fee_a_actual": pos.entry_fee_a_actual,
+                    "entry_fee_b_actual": pos.entry_fee_b_actual,
+                    "entry_oid_a": pos.entry_oid_a,
+                    "entry_oid_b": pos.entry_oid_b,
                 }
             else:
                 positions_data[label] = None
@@ -231,7 +264,13 @@ class StrategyEngine:
         }
 
     def load_state(self, state: dict[str, object]) -> None:
-        """Restore engine state from persisted data."""
+        """Restore engine state from persisted data.
+
+        Missing new-schema fields default to 0.0 / 0 so a state.json written
+        before the accounting overhaul still loads cleanly. Such positions
+        will close with zero entry-side fees recorded — accept the gap on the
+        first close after deploy rather than fabricate values.
+        """
         positions_data = state.get("positions", {})
         if not isinstance(positions_data, dict):
             return
@@ -257,6 +296,13 @@ class StrategyEngine:
                 filled_size_b=float(pos_data.get("filled_size_b", 0.0)),
                 hours_held=int(pos_data["hours_held"]),
                 funding_paid=float(pos_data.get("funding_paid", 0.0)),
+                funding_paid_actual=float(pos_data.get("funding_paid_actual", 0.0)),
+                entry_fee_a=float(pos_data.get("entry_fee_a", 0.0)),
+                entry_fee_b=float(pos_data.get("entry_fee_b", 0.0)),
+                entry_fee_a_actual=float(pos_data.get("entry_fee_a_actual", 0.0)),
+                entry_fee_b_actual=float(pos_data.get("entry_fee_b_actual", 0.0)),
+                entry_oid_a=int(pos_data.get("entry_oid_a", 0)),
+                entry_oid_b=int(pos_data.get("entry_oid_b", 0)),
             )
 
         cooldowns_data = state.get("cooldowns", {})

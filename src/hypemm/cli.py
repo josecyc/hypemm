@@ -652,6 +652,7 @@ def cmd_run(args: argparse.Namespace) -> None:
         ioc_aggression_bps=app.infra.ioc_aggression_bps,
         fill_poll_seconds=app.infra.fill_poll_seconds,
         fill_timeout_seconds=app.infra.fill_timeout_seconds,
+        taker_fee_bps=app.strategy.taker_fee_bps,
     )
     run_paper_loop(
         app,
@@ -660,6 +661,34 @@ def cmd_run(args: argparse.Namespace) -> None:
         live_mode=args.live,
         force_reconcile=args.force_reconcile,
     )
+
+
+def cmd_reconcile_pnl(args: argparse.Namespace) -> int:
+    """Compare CSV trades against HL's userFills + userFunding ledger.
+
+    Exit code 0 if the gap is within tolerance, 1 otherwise so this can be
+    wired into CI / cron alerting.
+    """
+    from hypemm.execution import LiveExecutionAdapter
+    from hypemm.reconcile_pnl import format_report, reconcile_run_dir
+
+    app = load_config(Path(args.config))
+    info_url = app.infra.rest_url
+    if not info_url.endswith("/info"):
+        info_url = info_url + "/info"
+
+    # Resolve the account address the same way LiveExecutionAdapter does, so
+    # this command works whether the user has HYPERLIQUID_ACCOUNT set or just
+    # the keystore.
+    account = args.account
+    if account is None:
+        adapter = LiveExecutionAdapter(rest_url=app.infra.rest_url.rsplit("/info", 1)[0])
+        account = adapter.account_address
+        adapter.close()
+
+    report = reconcile_run_dir(app.infra.run_dir, info_url=info_url, account=account)
+    print(format_report(report))
+    return 0 if abs(report.gap) <= args.tolerance else 1
 
 
 def main() -> None:
@@ -808,8 +837,32 @@ def main() -> None:
     )
     run_p.set_defaults(func=cmd_run)
 
+    rec_p = sub.add_parser(
+        "reconcile-pnl",
+        help="Diff the runner CSV against HL's userFills + userFunding ledger",
+    )
+    rec_p.add_argument("--config", required=True, help="Config file path")
+    rec_p.add_argument(
+        "--account",
+        default=None,
+        help=(
+            "HL account address to query (0x...). Defaults to the address derived "
+            "from HYPERLIQUID_KEYSTORE / HYPERLIQUID_ACCOUNT — same logic the "
+            "live runner uses."
+        ),
+    )
+    rec_p.add_argument(
+        "--tolerance",
+        type=float,
+        default=0.001,
+        help="Exit code 1 if |gap| exceeds this many USD (default 0.001)",
+    )
+    rec_p.set_defaults(func=cmd_reconcile_pnl)
+
     args = parser.parse_args()
-    args.func(args)
+    rc = args.func(args)
+    if isinstance(rc, int) and rc != 0:
+        raise SystemExit(rc)
 
 
 if __name__ == "__main__":

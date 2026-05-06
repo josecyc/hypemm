@@ -91,7 +91,58 @@ TRADE_FIELDS = [
     "entry_correlation",
     "funding_cost",
     "max_adverse_excursion",
+    # Sizes and per-leg fee detail. cost = entry_fee_a + entry_fee_b +
+    # exit_fee_a + exit_fee_b (modeled). *_actual hold the HL-billed amount
+    # for live; on backtest/paper they duplicate the modeled values.
+    "entry_size_a",
+    "entry_size_b",
+    "entry_fee_a",
+    "entry_fee_b",
+    "exit_fee_a",
+    "exit_fee_b",
+    "entry_fee_a_actual",
+    "entry_fee_b_actual",
+    "exit_fee_a_actual",
+    "exit_fee_b_actual",
+    "funding_actual",
+    "entry_oid_a",
+    "entry_oid_b",
+    "exit_oid_a",
+    "exit_oid_b",
 ]
+
+
+def migrate_trades_csv_if_stale(path: Path) -> None:
+    """Archive a pre-overhaul trades.csv so new rows write against a fresh header.
+
+    The accounting overhaul added per-leg fee/size/oid columns. Appending a
+    new-schema row to a file with the old header would leave a CSV whose
+    header arity doesn't match its later rows — every downstream reader
+    (dashboard, reconcile, load_trades) would mis-align columns.
+
+    Detects mismatch by comparing the header's column set to TRADE_FIELDS.
+    A strict-subset header is archived next to the original (with a
+    `_pre_accounting` suffix) so historical data isn't lost; the runner
+    starts a fresh CSV with the new header on the next log_trade call.
+    """
+    if not path.exists():
+        return
+    with open(path) as f:
+        first_line = f.readline().strip()
+    if not first_line:
+        return
+    existing_cols = set(first_line.split(","))
+    new_cols = set(TRADE_FIELDS)
+    if existing_cols == new_cols:
+        return
+    archive = path.with_name(path.stem + "_pre_accounting.csv")
+    path.rename(archive)
+    logger.warning(
+        "Archived pre-accounting trades CSV → %s (missing %d columns); "
+        "fresh CSV will be created on next trade.",
+        archive,
+        len(new_cols - existing_cols),
+    )
 
 
 def log_trade(trade: CompletedTrade, path: Path) -> None:
@@ -108,7 +159,14 @@ def log_trade(trade: CompletedTrade, path: Path) -> None:
 
 
 def load_trades(path: Path) -> list[CompletedTrade]:
-    """Load completed trades from a CSV file."""
+    """Load completed trades from a CSV file.
+
+    Pre-overhaul rows lack the per-leg fee, size, oid, and funding_actual
+    columns; missing fields default to 0. On those rows `cost` carries the
+    legacy round-trip total and *_actual will be 0 — the reconcile report
+    will surface them as unmatched if you try to reconcile a pre-overhaul
+    window.
+    """
     if not path.exists():
         return []
 
@@ -138,8 +196,23 @@ def load_trades(path: Path) -> list[CompletedTrade]:
                     net_pnl=float(row["net_pnl"]),
                     exit_reason=ExitReason(row["exit_reason"]),
                     entry_correlation=float(row["entry_correlation"]),
-                    funding_cost=float(row.get("funding_cost", "0")),
-                    max_adverse_excursion=float(row.get("max_adverse_excursion", "0")),
+                    funding_cost=float(row.get("funding_cost") or 0),
+                    max_adverse_excursion=float(row.get("max_adverse_excursion") or 0),
+                    entry_size_a=float(row.get("entry_size_a") or 0),
+                    entry_size_b=float(row.get("entry_size_b") or 0),
+                    entry_fee_a=float(row.get("entry_fee_a") or 0),
+                    entry_fee_b=float(row.get("entry_fee_b") or 0),
+                    exit_fee_a=float(row.get("exit_fee_a") or 0),
+                    exit_fee_b=float(row.get("exit_fee_b") or 0),
+                    entry_fee_a_actual=float(row.get("entry_fee_a_actual") or 0),
+                    entry_fee_b_actual=float(row.get("entry_fee_b_actual") or 0),
+                    exit_fee_a_actual=float(row.get("exit_fee_a_actual") or 0),
+                    exit_fee_b_actual=float(row.get("exit_fee_b_actual") or 0),
+                    funding_actual=float(row.get("funding_actual") or 0),
+                    entry_oid_a=int(row.get("entry_oid_a") or 0),
+                    entry_oid_b=int(row.get("entry_oid_b") or 0),
+                    exit_oid_a=int(row.get("exit_oid_a") or 0),
+                    exit_oid_b=int(row.get("exit_oid_b") or 0),
                 )
             )
     return trades
