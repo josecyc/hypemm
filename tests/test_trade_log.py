@@ -5,7 +5,12 @@ from __future__ import annotations
 from pathlib import Path
 
 from hypemm.models import CompletedTrade, Direction, ExitReason
-from hypemm.persistence import load_trades, log_trade
+from hypemm.persistence import (
+    TRADE_FIELDS,
+    load_trades,
+    log_trade,
+    migrate_trades_csv_if_stale,
+)
 
 
 def _make_trade(pair_label: str = "LINK/SOL", net_pnl: float = 500.0) -> CompletedTrade:
@@ -58,3 +63,46 @@ def test_append_multiple_trades(tmp_path: Path) -> None:
 def test_load_missing_file_returns_empty(tmp_path: Path) -> None:
     loaded = load_trades(tmp_path / "nonexistent.csv")
     assert loaded == []
+
+
+def test_migrate_archives_pre_overhaul_csv(tmp_path: Path) -> None:
+    """Pre-overhaul CSV (missing per-leg fee/size/oid columns) gets archived."""
+    path = tmp_path / "trades.csv"
+    pre_overhaul_header = (
+        "pair_label,direction,entry_ts,exit_ts,entry_z,exit_z,hours_held,"
+        "entry_price_a,entry_price_b,exit_price_a,exit_price_b,"
+        "pnl_leg_a,pnl_leg_b,gross_pnl,cost,net_pnl,exit_reason,"
+        "entry_correlation,funding_cost,max_adverse_excursion"
+    )
+    row = (
+        "LINK/SOL,long_ratio,1,2,-2.5,-0.3,1,15,150,16,149,"
+        "300,200,540,40,500,mean_revert,0.85,0,0"
+    )
+    path.write_text(pre_overhaul_header + "\n" + row + "\n")
+
+    migrate_trades_csv_if_stale(path)
+
+    archive = tmp_path / "trades_pre_accounting.csv"
+    assert archive.exists()
+    assert not path.exists()
+    # Original content preserved
+    assert "LINK/SOL,long_ratio" in archive.read_text()
+
+
+def test_migrate_is_noop_when_schema_matches(tmp_path: Path) -> None:
+    """Already-current CSV should not be touched."""
+    path = tmp_path / "trades.csv"
+    path.write_text(",".join(TRADE_FIELDS) + "\n")
+    mtime_before = path.stat().st_mtime
+
+    migrate_trades_csv_if_stale(path)
+
+    assert path.exists()
+    assert path.stat().st_mtime == mtime_before
+    assert not (tmp_path / "trades_pre_accounting.csv").exists()
+
+
+def test_migrate_is_noop_when_file_missing(tmp_path: Path) -> None:
+    migrate_trades_csv_if_stale(tmp_path / "nonexistent.csv")
+    # No exception, no files created
+    assert list(tmp_path.iterdir()) == []

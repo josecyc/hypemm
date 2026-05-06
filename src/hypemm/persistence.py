@@ -112,6 +112,39 @@ TRADE_FIELDS = [
 ]
 
 
+def migrate_trades_csv_if_stale(path: Path) -> None:
+    """Archive a pre-overhaul trades.csv so new rows write against a fresh header.
+
+    The accounting overhaul added per-leg fee/size/oid columns. Appending a
+    new-schema row to a file with the old header would leave a CSV whose
+    header arity doesn't match its later rows — every downstream reader
+    (dashboard, reconcile, load_trades) would mis-align columns.
+
+    Detects mismatch by comparing the header's column set to TRADE_FIELDS.
+    A strict-subset header is archived next to the original (with a
+    `_pre_accounting` suffix) so historical data isn't lost; the runner
+    starts a fresh CSV with the new header on the next log_trade call.
+    """
+    if not path.exists():
+        return
+    with open(path) as f:
+        first_line = f.readline().strip()
+    if not first_line:
+        return
+    existing_cols = set(first_line.split(","))
+    new_cols = set(TRADE_FIELDS)
+    if existing_cols == new_cols:
+        return
+    archive = path.with_name(path.stem + "_pre_accounting.csv")
+    path.rename(archive)
+    logger.warning(
+        "Archived pre-accounting trades CSV → %s (missing %d columns); "
+        "fresh CSV will be created on next trade.",
+        archive,
+        len(new_cols - existing_cols),
+    )
+
+
 def log_trade(trade: CompletedTrade, path: Path) -> None:
     """Append a completed trade to the CSV log."""
     path.parent.mkdir(parents=True, exist_ok=True)

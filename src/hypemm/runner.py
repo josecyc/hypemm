@@ -36,6 +36,7 @@ from hypemm.persistence import (
     load_trades,
     log_hourly_snapshot,
     log_trade,
+    migrate_trades_csv_if_stale,
     save_state,
     write_latest_snapshot,
 )
@@ -72,6 +73,12 @@ def run_paper_loop(
     latest_path = infra.paper_trades_dir / "latest_snapshot.csv"
     mode_path = infra.paper_trades_dir / "mode.txt"
     start_time = datetime.now(timezone.utc).isoformat()
+
+    # Detect a pre-accounting-overhaul trades.csv and archive it so the next
+    # log_trade call writes against a fresh header. Idempotent if already on
+    # the new schema. Run regardless of --fresh so a stale file doesn't get
+    # appended to even when state.json is reset.
+    migrate_trades_csv_if_stale(trades_path)
 
     completed_trades: list[CompletedTrade] = []
     if not fresh and state_path.exists():
