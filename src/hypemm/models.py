@@ -73,7 +73,22 @@ class OpenPosition:
     filled_size_a: float = 0.0
     filled_size_b: float = 0.0
     hours_held: int = 0
+    # Modeled per-leg entry fees (taker_fee_bps × fill notional). Live also
+    # captures the HL-billed fee in *_actual so the reconcile report can
+    # quantify model error without affecting the headline net_pnl.
+    entry_fee_a: float = 0.0
+    entry_fee_b: float = 0.0
+    entry_fee_a_actual: float = 0.0
+    entry_fee_b_actual: float = 0.0
+    # Total funding accrued during the hold. funding_paid is the modeled total
+    # (Σ leg-level signed_size × mark × hourly_rate). funding_paid_actual is
+    # the sum of HL userFunding deltas attributed to this position's legs.
     funding_paid: float = 0.0
+    funding_paid_actual: float = 0.0
+    # Order IDs from the entry fills. Lets the reconcile report map a CSV row
+    # to its HL userFills events exactly without timestamp matching.
+    entry_oid_a: int = 0
+    entry_oid_b: int = 0
 
     @property
     def direction_str(self) -> str:
@@ -81,8 +96,39 @@ class OpenPosition:
 
 
 @dataclass(frozen=True)
+class FillReport:
+    """Both-legs fill confirmation returned by an ExecutionAdapter.
+
+    *_actual fields equal the modeled values for paper and backtest; for live
+    they come from `userFills.fee` (the real HL-billed amount, summed across
+    multi-level fills). oids are 0 for non-live paths.
+
+    The engine reads only the modeled fields when computing `cost`/`net_pnl`
+    so backtest and live produce byte-identical CSV rows given the same
+    fills. Audit columns are propagated to CompletedTrade for reconcile.
+    """
+
+    price_a: float
+    price_b: float
+    size_a: float
+    size_b: float
+    fee_a: float
+    fee_b: float
+    fee_a_actual: float = 0.0
+    fee_b_actual: float = 0.0
+    oid_a: int = 0
+    oid_b: int = 0
+
+
+@dataclass(frozen=True)
 class CompletedTrade:
-    """A closed trade with realized P&L."""
+    """A closed trade with realized P&L.
+
+    `cost` and `funding_cost` are the MODELED totals — same formula in
+    backtest and live so per-trade rows are directly comparable. `*_actual`
+    columns capture the HL-billed amounts on live for reconciliation; on
+    backtest/paper they duplicate the modeled values to keep schema uniform.
+    """
 
     pair_label: str
     direction: Direction
@@ -104,6 +150,27 @@ class CompletedTrade:
     entry_correlation: float
     funding_cost: float = 0.0
     max_adverse_excursion: float = 0.0
+    # Sizes (post-rounding for live). Required for reconcile and for any
+    # downstream notional-based math.
+    entry_size_a: float = 0.0
+    entry_size_b: float = 0.0
+    # Modeled per-leg fees per side (entry/exit). cost = sum of these four.
+    entry_fee_a: float = 0.0
+    entry_fee_b: float = 0.0
+    exit_fee_a: float = 0.0
+    exit_fee_b: float = 0.0
+    # Actual HL-billed fees per leg per side. Equal to modeled for non-live.
+    entry_fee_a_actual: float = 0.0
+    entry_fee_b_actual: float = 0.0
+    exit_fee_a_actual: float = 0.0
+    exit_fee_b_actual: float = 0.0
+    # Actual funding from userFunding events. Equal to funding_cost for non-live.
+    funding_actual: float = 0.0
+    # Order IDs from fills. 0 for non-live.
+    entry_oid_a: int = 0
+    entry_oid_b: int = 0
+    exit_oid_a: int = 0
+    exit_oid_b: int = 0
 
 
 @dataclass(frozen=True)

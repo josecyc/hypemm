@@ -11,6 +11,7 @@ from pathlib import Path
 import httpx
 import pandas as pd
 
+from hypemm.accounting import funding_for_leg_hour, signed_leg_sizes
 from hypemm.config import InfraConfig
 from hypemm.models import DataFetchError, Direction, OpenPosition
 
@@ -304,17 +305,24 @@ def load_funding(funding_dir: Path, coins: list[str]) -> pd.DataFrame:
 
 def compute_funding_cost(
     direction: Direction,
-    notional: float,
+    size_a: float,
+    size_b: float,
     entry_ts_ms: int,
     exit_ts_ms: int,
     funding_a: "pd.Series[float]",
     funding_b: "pd.Series[float]",
+    prices_a: "pd.Series[float]",
+    prices_b: "pd.Series[float]",
 ) -> float:
     """Total funding paid (positive = cost to us) over [entry_ts, exit_ts).
 
-    Each hourly funding event charges notional * rate per leg.
-    LONG_RATIO (long A, short B):  net rate = rate_A - rate_B
-    SHORT_RATIO (short A, long B): net rate = rate_B - rate_A
+    Per-leg model (see hypemm.accounting.funding_for_leg_hour): each leg
+    accrues `signed_size × mark × hourly_rate` per hour. By linearity the
+    sum across legs of one coin equals HL's per-coin charge, even with
+    cross-pair coin overlap.
+
+    `prices_a`/`prices_b` carry the hourly mark prices indexed identically
+    to `funding_a`/`funding_b`.
     """
     if exit_ts_ms <= entry_ts_ms:
         return 0.0
@@ -326,6 +334,8 @@ def compute_funding_cost(
     mask_b = (funding_b.index >= entry_ts) & (funding_b.index < exit_ts)
     rates_a = funding_a[mask_a]
     rates_b = funding_b[mask_b]
+    marks_a = prices_a.reindex(rates_a.index)
+    marks_b = prices_b.reindex(rates_b.index)
 
     expected_hours = (exit_ts_ms - entry_ts_ms) // 3_600_000
     if len(rates_a) != expected_hours or len(rates_b) != expected_hours:
@@ -333,12 +343,15 @@ def compute_funding_cost(
             f"Funding data gap: expected {expected_hours} hourly records between "
             f"{entry_ts} and {exit_ts}, got {len(rates_a)} for A and {len(rates_b)} for B"
         )
+    if marks_a.isna().any() or marks_b.isna().any():
+        raise ValueError(
+            f"Mark-price gap: missing prices at funding hours between {entry_ts} " f"and {exit_ts}"
+        )
 
-    sum_a = float(rates_a.sum())
-    sum_b = float(rates_b.sum())
-    if direction == Direction.LONG_RATIO:
-        return notional * (sum_a - sum_b)
-    return notional * (sum_b - sum_a)
+    signed_a, signed_b = signed_leg_sizes(direction, size_a, size_b)
+    leg_a = float((marks_a * rates_a).sum()) * signed_a
+    leg_b = float((marks_b * rates_b).sum()) * signed_b
+    return leg_a + leg_b
 
 
 def fetch_latest_funding_rates(
@@ -367,23 +380,110 @@ def fetch_latest_funding_rates(
 def accrue_hourly_funding(
     positions: dict[str, OpenPosition | None],
     rates: dict[str, float],
-    notional: float,
+    marks: dict[str, float],
 ) -> None:
-    """Add one hour of funding to each open position's funding_paid."""
+    """Accrue one hour of MODELED funding to each open position.
+
+    Per-leg formula: signed_size × mark × hourly_rate. Summed into
+    `pos.funding_paid`. By linearity, summing across all open legs holding
+    a coin equals the HL-billed funding for that coin in the same hour.
+
+    Skips a position if either coin's rate or mark is missing — the runner
+    will retry on the next hour boundary; better to underaccrue one hour
+    than to feed in stale or fabricated data.
+    """
     for pos in positions.values():
         if pos is None:
             continue
         rate_a = rates.get(pos.pair.coin_a)
         rate_b = rates.get(pos.pair.coin_b)
-        if rate_a is None or rate_b is None:
+        mark_a = marks.get(pos.pair.coin_a)
+        mark_b = marks.get(pos.pair.coin_b)
+        if rate_a is None or rate_b is None or mark_a is None or mark_b is None:
             logger.warning(
-                "Skipping funding accrual for %s: missing rate for %s or %s",
+                "Skipping funding accrual for %s: missing rate or mark for %s/%s",
                 pos.pair.label,
                 pos.pair.coin_a,
                 pos.pair.coin_b,
             )
             continue
-        if pos.direction == Direction.LONG_RATIO:
-            pos.funding_paid += notional * (rate_a - rate_b)
-        else:
-            pos.funding_paid += notional * (rate_b - rate_a)
+        signed_a, signed_b = signed_leg_sizes(pos.direction, pos.filled_size_a, pos.filled_size_b)
+        pos.funding_paid += funding_for_leg_hour(signed_a, mark_a, rate_a)
+        pos.funding_paid += funding_for_leg_hour(signed_b, mark_b, rate_b)
+
+
+def accrue_actual_funding(
+    positions: dict[str, OpenPosition | None],
+    events: list[dict[str, object]],
+) -> None:
+    """Distribute HL `userFunding` events to open-position legs by signed size.
+
+    Each event has shape `{"time": ms, "delta": {"type": "funding",
+    "coin": str, "usdc": str, ...}}`. We sum per-coin deltas and then
+    apportion to all legs holding that coin in proportion to their signed
+    size — which equals each leg's own funding charge by linearity. If no
+    leg currently holds the coin (event arrived after the position closed)
+    the delta is dropped silently; reconcile catches such cases.
+    """
+    by_coin: dict[str, float] = {}
+    for ev in events:
+        delta = ev.get("delta")
+        if not isinstance(delta, dict):
+            continue
+        if delta.get("type") != "funding":
+            continue
+        coin = delta.get("coin")
+        usdc = delta.get("usdc")
+        if not isinstance(coin, str) or usdc is None:
+            continue
+        by_coin[coin] = by_coin.get(coin, 0.0) + float(usdc)
+
+    for coin, total in by_coin.items():
+        legs: list[tuple[OpenPosition, float]] = []
+        for pos in positions.values():
+            if pos is None:
+                continue
+            if pos.pair.coin_a == coin:
+                signed_a, _ = signed_leg_sizes(pos.direction, pos.filled_size_a, pos.filled_size_b)
+                legs.append((pos, signed_a))
+            if pos.pair.coin_b == coin:
+                _, signed_b = signed_leg_sizes(pos.direction, pos.filled_size_a, pos.filled_size_b)
+                legs.append((pos, signed_b))
+
+        if not legs:
+            logger.debug("Skipping userFunding for %s: no open leg holds it", coin)
+            continue
+        # Linearity gives leg_share = total × (signed / net_signed). This
+        # equals each leg's own modeled funding (signed × mark × rate) when
+        # everything is internally consistent. When net_signed = 0 (cross-pair
+        # netting), HL billed 0 and we don't attribute anything — each pair's
+        # modeled funding will diverge from actual by exactly its own
+        # contribution, which reconcile surfaces as drift.
+        net_signed = sum(s for _, s in legs)
+        if abs(net_signed) < 1e-12:
+            continue
+        for pos, signed in legs:
+            pos.funding_paid_actual += total * (signed / net_signed)
+
+
+def fetch_user_funding(
+    client: httpx.Client,
+    rest_url: str,
+    account: str,
+    start_ms: int,
+    end_ms: int | None = None,
+) -> list[dict[str, object]]:
+    """Fetch HL userFunding ledger entries for the account since start_ms."""
+    payload: dict[str, object] = {
+        "type": "userFunding",
+        "user": account,
+        "startTime": start_ms,
+    }
+    if end_ms is not None:
+        payload["endTime"] = end_ms
+    r = client.post(rest_url, json=payload, timeout=15.0)
+    r.raise_for_status()
+    data = r.json()
+    if not isinstance(data, list):
+        return []
+    return [dict(row) for row in data]

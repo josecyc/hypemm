@@ -91,6 +91,24 @@ TRADE_FIELDS = [
     "entry_correlation",
     "funding_cost",
     "max_adverse_excursion",
+    # Sizes and per-leg fee detail. cost = entry_fee_a + entry_fee_b +
+    # exit_fee_a + exit_fee_b (modeled). *_actual hold the HL-billed amount
+    # for live; on backtest/paper they duplicate the modeled values.
+    "entry_size_a",
+    "entry_size_b",
+    "entry_fee_a",
+    "entry_fee_b",
+    "exit_fee_a",
+    "exit_fee_b",
+    "entry_fee_a_actual",
+    "entry_fee_b_actual",
+    "exit_fee_a_actual",
+    "exit_fee_b_actual",
+    "funding_actual",
+    "entry_oid_a",
+    "entry_oid_b",
+    "exit_oid_a",
+    "exit_oid_b",
 ]
 
 
@@ -108,7 +126,14 @@ def log_trade(trade: CompletedTrade, path: Path) -> None:
 
 
 def load_trades(path: Path) -> list[CompletedTrade]:
-    """Load completed trades from a CSV file."""
+    """Load completed trades from a CSV file.
+
+    Pre-overhaul rows lack the per-leg fee, size, oid, and funding_actual
+    columns; missing fields default to 0. On those rows `cost` carries the
+    legacy round-trip total and *_actual will be 0 — the reconcile report
+    will surface them as unmatched if you try to reconcile a pre-overhaul
+    window.
+    """
     if not path.exists():
         return []
 
@@ -138,8 +163,23 @@ def load_trades(path: Path) -> list[CompletedTrade]:
                     net_pnl=float(row["net_pnl"]),
                     exit_reason=ExitReason(row["exit_reason"]),
                     entry_correlation=float(row["entry_correlation"]),
-                    funding_cost=float(row.get("funding_cost", "0")),
-                    max_adverse_excursion=float(row.get("max_adverse_excursion", "0")),
+                    funding_cost=float(row.get("funding_cost") or 0),
+                    max_adverse_excursion=float(row.get("max_adverse_excursion") or 0),
+                    entry_size_a=float(row.get("entry_size_a") or 0),
+                    entry_size_b=float(row.get("entry_size_b") or 0),
+                    entry_fee_a=float(row.get("entry_fee_a") or 0),
+                    entry_fee_b=float(row.get("entry_fee_b") or 0),
+                    exit_fee_a=float(row.get("exit_fee_a") or 0),
+                    exit_fee_b=float(row.get("exit_fee_b") or 0),
+                    entry_fee_a_actual=float(row.get("entry_fee_a_actual") or 0),
+                    entry_fee_b_actual=float(row.get("entry_fee_b_actual") or 0),
+                    exit_fee_a_actual=float(row.get("exit_fee_a_actual") or 0),
+                    exit_fee_b_actual=float(row.get("exit_fee_b_actual") or 0),
+                    funding_actual=float(row.get("funding_actual") or 0),
+                    entry_oid_a=int(row.get("entry_oid_a") or 0),
+                    entry_oid_b=int(row.get("entry_oid_b") or 0),
+                    exit_oid_a=int(row.get("exit_oid_a") or 0),
+                    exit_oid_b=int(row.get("exit_oid_b") or 0),
                 )
             )
     return trades
