@@ -377,7 +377,10 @@ def test_get_fill_prices_open_keeps_reduce_only_false():
     assert order_calls[1]["json"]["action"]["orders"][0]["r"] is False
 
 
-def test_get_fill_prices_aborts_on_excess_slippage():
+def test_get_fill_prices_warns_on_excess_slippage_but_returns(caplog):
+    # max_slippage_bps is telemetry, not a control: by the time we observe
+    # realized fills both legs are already on HL. Refusing to return would
+    # orphan the position (exchange filled, engine state never updated).
     client = _MockClient()
     client.queue("meta", _meta_payload())
     client.queue("exchange:updateLeverage", {"status": "ok"})
@@ -391,8 +394,16 @@ def test_get_fill_prices_aborts_on_excess_slippage():
     client.queue("userFills", [{"oid": 222, "px": "100.01", "sz": "500.0"}])
 
     adapter = _make_adapter(client)
-    with pytest.raises(ExecutionError, match="slippage"):
-        adapter.get_fill_prices(PairConfig("LINK", "SOL"), Direction.LONG_RATIO, 50_000.0)
+    import logging
+
+    with caplog.at_level(logging.WARNING):
+        fa, fb = adapter.get_fill_prices(
+            PairConfig("LINK", "SOL"), Direction.LONG_RATIO, 50_000.0
+        )
+
+    assert fa == pytest.approx(10.05)
+    assert fb == pytest.approx(100.01)
+    assert any("slippage" in r.message and "LINK" in r.message for r in caplog.records)
 
 
 def test_get_fill_prices_raises_on_unknown_coin():

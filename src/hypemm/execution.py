@@ -212,8 +212,10 @@ class LiveExecutionAdapter:
 
     Builds order actions, signs them via the EIP-712 phantom-agent scheme, posts
     to /exchange, polls /info userFills for fills, and returns the realized
-    VWAP per leg. Refuses to fill if the realized VWAP differs from the signal
-    mid by more than max_slippage_bps.
+    VWAP per leg. max_slippage_bps is telemetry only — fills outside the cap
+    are logged as warnings, not raised, because by the time we observe the
+    realized fill both legs are already on the exchange and refusing to update
+    engine state would orphan the position.
 
     Required environment (one of these signing-key sources):
         HYPERLIQUID_PRIVATE_KEY  — raw hex private key (0x-prefixed), OR
@@ -325,7 +327,9 @@ class LiveExecutionAdapter:
         whenever the price has moved, leaving a residual sliver under reduceOnly.
 
         Aborts (raises ExecutionError) if any leg fails to fill within
-        fill_timeout_seconds, or if the realized fill exceeds max_slippage_bps.
+        fill_timeout_seconds. Realized fills outside max_slippage_bps are
+        logged as warnings but still returned — the trade has already executed
+        on HL by then, so refusing to commit would orphan the position.
 
         FillReport.fee_a/b are the modeled fees so backtest and live use the
         same number. fee_a_actual/fee_b_actual are summed from userFills.fee
@@ -561,11 +565,18 @@ class LiveExecutionAdapter:
         )
 
     def _check_slippage(self, coin: str, fill_price: float, mid_price: float) -> None:
+        # By the time this runs both legs are already filled on HL. Raising would
+        # orphan the position (exchange filled, engine state never updated).
+        # Log breach and return; the cap is now telemetry, not a control.
         slip_bps = abs(fill_price - mid_price) / mid_price * 10_000
         if slip_bps > self.max_slippage_bps:
-            raise ExecutionError(
-                f"{coin} fill {fill_price:.6f} vs mid {mid_price:.6f} = "
-                f"{slip_bps:.1f} bps slippage > {self.max_slippage_bps} bps cap"
+            logger.warning(
+                "%s fill %.6f vs mid %.6f = %.1f bps slippage > %.1f bps cap (committing anyway)",
+                coin,
+                fill_price,
+                mid_price,
+                slip_bps,
+                self.max_slippage_bps,
             )
 
     def _post_signed(self, action: dict[str, Any]) -> dict[str, Any]:

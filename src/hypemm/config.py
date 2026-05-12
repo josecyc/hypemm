@@ -93,7 +93,7 @@ class InfraConfig:
     # Live trading
     leverage: int = 5
     is_cross_margin: bool = True
-    max_slippage_bps: float = 5.0  # abort fill if VWAP > N bps from signal mid
+    max_slippage_bps: float = 5.0  # log warning if realized VWAP > N bps from mid (telemetry only)
     ioc_aggression_bps: float = 10.0  # crossing limit price = mid +/- this many bps
     fill_poll_seconds: float = 0.5
     fill_timeout_seconds: float = 30.0
