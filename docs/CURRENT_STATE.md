@@ -42,4 +42,9 @@ Preserved on disk but not relaunched.
 - `data/runs/testnet/optimized_3pair/` — testnet smoke-test artifacts; no
   active runner.
 
-Last deployed commit, server-side: `cefc890` (verified 2026-04-30).
+Last deployed commit, server-side: `d1c8289` on `accounting-overhaul`
+(verified 2026-05-12). The runner was restarted on 2026-05-12 to clear a
+stuck DOGE/ADA position whose close legs filled on HL on 2026-05-10 but
+whose `confirm_exit` was suppressed by a then-fatal slippage cap. Same
+restart picked up the slippage-cap-to-warning fix
+(`c1da297` + `d1c8289`), so the same divergence cannot recur.
