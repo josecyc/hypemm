@@ -397,12 +397,12 @@ def test_get_fill_prices_warns_on_excess_slippage_but_returns(caplog):
     import logging
 
     with caplog.at_level(logging.WARNING):
-        fa, fb, _sa, _sb = adapter.get_fill_prices(
+        fill = adapter.get_fill_prices(
             PairConfig("LINK", "SOL"), Direction.LONG_RATIO, 50_000.0
         )
 
-    assert fa == pytest.approx(10.05)
-    assert fb == pytest.approx(100.01)
+    assert fill.price_a == pytest.approx(10.05)
+    assert fill.price_b == pytest.approx(100.01)
     assert any("slippage" in r.message and "LINK" in r.message for r in caplog.records)
 
 
