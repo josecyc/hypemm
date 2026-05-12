@@ -397,7 +397,7 @@ def test_get_fill_prices_warns_on_excess_slippage_but_returns(caplog):
     import logging
 
     with caplog.at_level(logging.WARNING):
-        fa, fb = adapter.get_fill_prices(
+        fa, fb, _sa, _sb = adapter.get_fill_prices(
             PairConfig("LINK", "SOL"), Direction.LONG_RATIO, 50_000.0
         )
 
