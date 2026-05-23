@@ -41,6 +41,7 @@ from hypemm.persistence import (
     write_latest_snapshot,
 )
 from hypemm.price_buffer import HourlyPriceBuffer
+from hypemm.reconcile import reconcile
 from hypemm.risk import RiskReport, RiskStatus, compute_risk_report
 from hypemm.signals import compute_pair_signal
 
@@ -96,8 +97,6 @@ def run_paper_loop(
     mode_label = "LIVE" if live_mode else "paper"
 
     if live_mode:
-        from hypemm.reconcile import reconcile
-
         if not hasattr(adapter, "fetch_user_state"):
             raise RuntimeError(
                 "live mode requires an adapter with fetch_user_state; use LiveExecutionAdapter"
@@ -244,6 +243,11 @@ def _run_loop(
                         e,
                     )
 
+            # Runtime drift detection. Closes are now non-reduceOnly (see
+            # execution.py docstring); we rely on this loop to catch any
+            # divergence between engine bookkeeping and HL's per-coin net.
+            _check_drift_and_halt(engine, adapter, config.notional_per_leg)
+
             log_hourly_snapshot(engine, signals, config, snapshot_path)
             save_state(engine, state_path, start_time)
 
@@ -251,6 +255,48 @@ def _run_loop(
         write_latest_snapshot(engine, signals, config, latest_path)
 
         time.sleep(infra.poll_interval_sec)
+
+
+def _check_drift_and_halt(
+    engine: StrategyEngine, adapter: ExecutionAdapter, notional_per_leg: float
+) -> None:
+    """On live, compare engine's expected per-coin net against HL. Halt on drift.
+
+    Paper and backtest adapters don't expose fetch_user_state; nothing to
+    check. On live, any divergence > the existing 5% reconcile tolerance
+    sets halt_trading=True so the next process_bar emits no orders — entries
+    AND exits both suppressed because we don't know which side is true.
+    Operator must investigate, restart, and use --force-reconcile to proceed.
+
+    A clearinghouseState fetch failure is treated as transient: logged and
+    swallowed. Persistent failures show up as silent drift; the startup
+    reconcile on next restart catches them.
+    """
+    if not hasattr(adapter, "fetch_user_state"):
+        return
+    try:
+        user_state = adapter.fetch_user_state()
+    except Exception as e:  # noqa: BLE001 — keep runner alive on transient
+        logger.warning("Runtime reconcile fetch failed (skipping this bar): %s", e)
+        return
+    divergences = reconcile(engine, user_state, notional_per_leg)
+    if not divergences:
+        return
+    for d in divergences:
+        logger.error(
+            "DRIFT detected: %s expected %s %.6f, exchange has %.6f",
+            d.coin,
+            d.expected_direction,
+            d.expected_size,
+            d.actual_size,
+        )
+    engine.halt_trading = True
+    logger.critical(
+        "halt_trading=True due to %d divergence(s) — runner will emit no "
+        "more orders until restarted; flatten on the exchange, reset state, "
+        "and restart with --fresh or --force-reconcile",
+        len(divergences),
+    )
 
 
 def _log_risk_change(prev: RiskStatus, report: RiskReport) -> None:

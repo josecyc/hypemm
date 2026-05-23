@@ -39,6 +39,31 @@ class StrategyEngine:
         # the runner from the RiskMonitor when a kill switch is active.
         # Existing positions continue to be managed by the exit logic.
         self.halt_entries: bool = False
+        # When True, process_bar returns an empty list — both entries AND
+        # exits are suppressed. Set by the runtime reconcile loop when engine
+        # state diverges from HL: we can't safely trade until an operator
+        # investigates because closing might compound the divergence.
+        self.halt_trading: bool = False
+
+    def signed_coin_exposure(self) -> dict[str, float]:
+        """Sum of signed leg sizes per coin across all open positions.
+
+        Equals what HL's per-coin szi should read if engine and exchange
+        agree. The runtime reconcile loop compares this against
+        clearinghouseState; mismatch > tolerance trips halt_trading.
+
+        LONG_RATIO contributes +size_a on coin_a and -size_b on coin_b.
+        SHORT_RATIO contributes the opposite. Same-direction pairs on a
+        shared coin add; opposite-direction pairs cancel.
+        """
+        out: dict[str, float] = {}
+        for pos in self.positions.values():
+            if pos is None:
+                continue
+            sign_a = 1 if pos.direction == Direction.LONG_RATIO else -1
+            out[pos.pair.coin_a] = out.get(pos.pair.coin_a, 0.0) + sign_a * pos.filled_size_a
+            out[pos.pair.coin_b] = out.get(pos.pair.coin_b, 0.0) - sign_a * pos.filled_size_b
+        return out
 
     def process_bar(
         self,
@@ -46,6 +71,8 @@ class StrategyEngine:
         timestamp_ms: int,
     ) -> list[EntryOrder | ExitOrder]:
         """Process one bar of signals. Returns entry/exit orders to execute."""
+        if self.halt_trading:
+            return []
         orders: list[EntryOrder | ExitOrder] = []
 
         for pair in self.config.pairs:

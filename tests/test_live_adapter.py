@@ -225,13 +225,17 @@ def test_get_fill_prices_long_ratio_places_correct_legs():
     assert order_calls[1]["json"]["action"]["orders"][0]["b"] is False
 
 
-def test_get_fill_prices_close_inverts_legs_and_sets_reduce_only():
-    """Regression: ExitOrder used to re-enter the same direction.
+def test_get_fill_prices_close_inverts_legs_without_reduce_only():
+    """Closes flip both leg directions but do NOT set reduceOnly.
 
-    When the runner closes a SHORT_RATIO position it passes the entry
-    direction with is_close=True. Both legs must flip and both orders
-    must go out reduceOnly so HL closes the existing position rather
-    than opening a same-direction add.
+    Why no reduceOnly: in a multi-pair portfolio sharing coins, HL nets
+    per-coin across all pairs. If pair B is open in the opposite direction
+    on a coin pair A shares, HL's actual net on that coin is the algebraic
+    sum, not pair A's leg size. A reduceOnly close of pair A would reject
+    ("would increase position") whenever the net direction differs from
+    pair A's leg direction. Sending without reduceOnly lets the close
+    move HL's net by exactly the leg amount; the runner's reconcile loop
+    is the safety net for any unexpected divergence.
     """
     client = _MockClient()
     client.queue("meta", _meta_payload())
@@ -263,8 +267,8 @@ def test_get_fill_prices_close_inverts_legs_and_sets_reduce_only():
     leg_b = order_calls[1]["json"]["action"]["orders"][0]
     assert leg_a["b"] is True  # buy LINK to close prior short
     assert leg_b["b"] is False  # sell SOL to close prior long
-    assert leg_a["r"] is True  # reduceOnly
-    assert leg_b["r"] is True
+    assert leg_a["r"] is False  # NOT reduceOnly — see docstring
+    assert leg_b["r"] is False
 
 
 def test_close_uses_explicit_close_sizes_verbatim():
@@ -397,9 +401,7 @@ def test_get_fill_prices_warns_on_excess_slippage_but_returns(caplog):
     import logging
 
     with caplog.at_level(logging.WARNING):
-        fill = adapter.get_fill_prices(
-            PairConfig("LINK", "SOL"), Direction.LONG_RATIO, 50_000.0
-        )
+        fill = adapter.get_fill_prices(PairConfig("LINK", "SOL"), Direction.LONG_RATIO, 50_000.0)
 
     assert fill.price_a == pytest.approx(10.05)
     assert fill.price_b == pytest.approx(100.01)
@@ -445,7 +447,14 @@ def test_get_fill_prices_rejects_below_min_order_value():
 
 
 def test_leg_b_failure_triggers_leg_a_flatten():
-    """If leg B fails after leg A fills we MUST close leg A immediately."""
+    """If leg B fails after leg A fills we MUST close leg A immediately.
+
+    Flatten is sent WITHOUT reduceOnly: a reduceOnly flatten can reject if
+    HL's per-coin net (across all pairs sharing this coin) doesn't agree
+    with leg A's direction. Sending non-reduceOnly moves the HL net by
+    exactly the leg amount, which is what we want to restore the
+    pre-attempt state.
+    """
     client = _MockClient()
     client.queue("meta", _meta_payload())
     client.queue("exchange:updateLeverage", {"status": "ok"})
@@ -466,7 +475,7 @@ def test_leg_b_failure_triggers_leg_a_flatten():
     with pytest.raises(ExecutionError, match="Min size"):
         adapter.get_fill_prices(PairConfig("LINK", "SOL"), Direction.LONG_RATIO, 50_000.0)
 
-    # Verify the flatten order was placed: 3 orders total, the third is reduceOnly
+    # 3 orders total: leg A, leg B (errored), flatten leg A.
     order_calls = [
         c
         for c in client.calls
@@ -474,13 +483,66 @@ def test_leg_b_failure_triggers_leg_a_flatten():
     ]
     assert len(order_calls) == 3
     flatten = order_calls[2]["json"]["action"]["orders"][0]
-    assert flatten["r"] is True  # reduceOnly
+    assert flatten["r"] is False  # NOT reduceOnly — see docstring
     assert flatten["b"] is False  # opposite of original LONG_RATIO leg A buy
     # Closing a long → SELL → IoC limit must sit at or below the bid (10.0)
     # to cross immediately. A prior bug inverted the price side, putting the
     # limit above mid; HL refused with "could not immediately match against
     # any resting orders."
     assert float(flatten["p"]) <= 10.0
+
+
+def test_close_leg_b_failure_triggers_leg_a_flatten_no_reduce_only():
+    """Close-path: leg A successfully closes (sells), leg B rejects.
+
+    The flatten must put leg A BACK into the position (a buy) so engine
+    state stays consistent with HL. Non-reduceOnly because reduceOnly buy
+    against an already-reduced long would reject. The runner retries on
+    the next bar.
+    """
+    client = _MockClient()
+    client.queue("meta", _meta_payload())
+    client.queue("exchange:updateLeverage", {"status": "ok"})
+    client.queue("exchange:updateLeverage", {"status": "ok"})
+    client.queue("l2Book:LINK", {"levels": [[{"px": "10.0"}], [{"px": "10.02"}]]})
+    client.queue("l2Book:SOL", {"levels": [[{"px": "100.0"}], [{"px": "100.04"}]]})
+    # Closing a LONG_RATIO entry inverts legs: SELL LINK, BUY SOL.
+    # Leg A (sell LINK) places ok.
+    client.queue("exchange:order", _ok_status(111, "filled"))
+    # Leg B (buy SOL) rejects.
+    client.queue(
+        "exchange:order",
+        {"status": "ok", "response": {"data": {"statuses": [{"error": "Insufficient margin"}]}}},
+    )
+    # Flatten leg A (buy LINK back) succeeds.
+    client.queue("exchange:order", _ok_status(333, "filled"))
+    adapter = _make_adapter(client)
+
+    with pytest.raises(ExecutionError, match="Insufficient margin"):
+        adapter.get_fill_prices(
+            PairConfig("LINK", "SOL"),
+            Direction.LONG_RATIO,
+            50_000.0,
+            is_close=True,
+            close_sizes=(5000.0, 500.0),
+        )
+
+    order_calls = [
+        c
+        for c in client.calls
+        if "/exchange" in c["url"] and c["json"]["action"]["type"] == "order"
+    ]
+    assert len(order_calls) == 3
+    leg_a = order_calls[0]["json"]["action"]["orders"][0]
+    flatten = order_calls[2]["json"]["action"]["orders"][0]
+    # Leg A close of a LONG_RATIO long = SELL LINK.
+    assert leg_a["b"] is False
+    assert leg_a["r"] is False  # close not reduceOnly
+    # Flatten = BUY LINK (restore), non-reduceOnly.
+    assert flatten["b"] is True
+    assert flatten["r"] is False
+    # Same size as leg A (restoring exactly what was sold).
+    assert float(flatten["s"]) == pytest.approx(float(leg_a["s"]))
 
 
 # -- fetch_user_state ------------------------------------------------------

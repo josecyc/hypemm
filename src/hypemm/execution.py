@@ -316,15 +316,23 @@ class LiveExecutionAdapter:
 
         `direction` is the ENTRY direction (LONG_RATIO = long A, short B;
         SHORT_RATIO = short A, long B). When is_close=True both legs are
-        flipped and orders go out reduceOnly so HL closes the existing
-        position rather than opening a same-direction add — without this,
-        an exit places another entry and doubles the position.
+        flipped so the close moves the engine's expected per-coin net by
+        exactly the leg amount.
+
+        Orders go out WITHOUT reduceOnly. In a multi-pair portfolio sharing
+        coins, HL nets per-coin across all pairs; pair A's leg size doesn't
+        equal HL's actual position when pair B holds the opposite direction
+        on the same coin. ReduceOnly would reject in that case. Sending
+        non-reduceOnly lets HL's net move by the leg amount, which is what
+        the engine's bookkeeping expects. Safety against stale engine state
+        is provided by the runtime reconcile loop (see runner.py), not by
+        per-order reduceOnly tripwires.
 
         On entry, size = notional / mid rounded to szDecimals. The rounded
         size is what HL fills, and is what the runner must persist on the
         position so that `close_sizes` on exit matches exactly. Recomputing
         size from notional/mid at exit time would round to a different value
-        whenever the price has moved, leaving a residual sliver under reduceOnly.
+        whenever the price has moved, leaving a residual sliver.
 
         Aborts (raises ExecutionError) if any leg fails to fill within
         fill_timeout_seconds. Realized fills outside max_slippage_bps are
@@ -381,16 +389,13 @@ class LiveExecutionAdapter:
                         f"(notional {notional_per_leg}, size {rounded}, mid {mid:.6f})"
                     )
 
-        order_id_a = self._place_ioc(
-            meta[pair.coin_a], is_buy_a, rounded_a, mid_a, reduce_only=is_close
-        )
+        order_id_a = self._place_ioc(meta[pair.coin_a], is_buy_a, rounded_a, mid_a)
         # If leg B fails AFTER leg A filled, we MUST flatten leg A to avoid an
-        # unhedged position. Try-block scopes that recovery; failures inside
-        # are logged but the original error is what propagates.
+        # unhedged half-trade. On entries that restores flat; on closes it
+        # restores the pre-attempt open. Try-block scopes that recovery;
+        # failures inside are logged but the original error is what propagates.
         try:
-            order_id_b = self._place_ioc(
-                meta[pair.coin_b], is_buy_b, rounded_b, mid_b, reduce_only=is_close
-            )
+            order_id_b = self._place_ioc(meta[pair.coin_b], is_buy_b, rounded_b, mid_b)
             fill_a, actual_fee_a = self._await_fill(pair.coin_a, order_id_a)
             fill_b, actual_fee_b = self._await_fill(pair.coin_b, order_id_b)
         except ExecutionError as e:
@@ -424,11 +429,20 @@ class LiveExecutionAdapter:
     def _flatten_position(
         self, asset: AssetMeta, was_buy: bool, size: float, mid_price: float
     ) -> None:
-        """Emergency flatten: place a reduceOnly IoC opposite to the original.
+        """Emergency flatten: place an IoC opposite to the original.
+
+        Used when leg B fails after leg A filled. The flatten undoes leg A's
+        effect on HL's net position by the same size, restoring the
+        pre-attempt state so engine bookkeeping stays consistent.
 
         Closing a long means SELLING into the bid → limit must sit below mid.
         Closing a short means BUYING from the ask → limit must sit above mid.
         Equivalent to _place_ioc with the side flipped.
+
+        Sent WITHOUT reduceOnly: in the multi-pair sharing model the per-coin
+        net may not agree with leg A's direction (e.g., leg A close reduced a
+        position that another pair holds in opposite direction), so reduceOnly
+        would reject. The runtime reconcile loop is the safety net.
         """
         is_buy_close = not was_buy
         sign = 1 if is_buy_close else -1
@@ -439,7 +453,7 @@ class LiveExecutionAdapter:
             "b": is_buy_close,
             "p": format_price(crossing_price, asset.sz_decimals),
             "s": format_size(size, asset.sz_decimals),
-            "r": True,  # reduceOnly
+            "r": False,
             "t": {"limit": {"tif": "Ioc"}},
         }
         action = {"type": "order", "orders": [order], "grouping": "na"}
@@ -501,10 +515,16 @@ class LiveExecutionAdapter:
         is_buy: bool,
         size: float,
         mid_price: float,
-        *,
-        reduce_only: bool = False,
     ) -> int:
-        """Place an IoC limit order with a price aggressive enough to cross."""
+        """Place an IoC limit order with a price aggressive enough to cross.
+
+        Always sent with reduceOnly=False. The engine manages per-pair
+        bookkeeping and HL nets per-coin; reduceOnly would reject closes
+        whenever the per-coin net direction disagrees with the leg
+        direction (e.g., when two pairs share a coin in opposite directions).
+        See LiveExecutionAdapter.get_fill_prices docstring for the full
+        rationale and the runtime reconcile loop that replaces the safety.
+        """
         sign = 1 if is_buy else -1
         crossing_price = mid_price * (1 + sign * self.ioc_aggression_bps / 10_000)
         crossing_price = round_price(crossing_price, asset.sz_decimals)
@@ -514,7 +534,7 @@ class LiveExecutionAdapter:
             "b": is_buy,
             "p": format_price(crossing_price, asset.sz_decimals),
             "s": format_size(size, asset.sz_decimals),
-            "r": reduce_only,
+            "r": False,
             "t": {"limit": {"tif": "Ioc"}},
         }
         action = {"type": "order", "orders": [order], "grouping": "na"}

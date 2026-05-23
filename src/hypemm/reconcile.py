@@ -33,8 +33,12 @@ def _expected_size_per_coin(engine: StrategyEngine, notional_per_leg: float) -> 
 
     For LONG_RATIO: long coin_a, short coin_b.
     For SHORT_RATIO: short coin_a, long coin_b.
-    Size is in coins, computed at entry price. (We compare in coins, not USD,
-    because the exchange reports szi which is a coin-denominated size.)
+    Size is in coins, computed from `filled_size_a/b` when persisted
+    (post-accounting-overhaul positions) and from `notional_per_leg /
+    entry_price` otherwise. Filled sizes are the actual szDecimals-rounded
+    amounts HL booked, so they're what HL's `szi` should match; the
+    notional/price fallback is a best-effort approximation for legacy
+    positions that don't carry filled sizes.
     """
     out: dict[str, float] = {}
     for label, pos in engine.positions.items():
@@ -42,12 +46,14 @@ def _expected_size_per_coin(engine: StrategyEngine, notional_per_leg: float) -> 
             continue
         sign_a = 1 if pos.direction == Direction.LONG_RATIO else -1
         sign_b = -sign_a
-        out[pos.pair.coin_a] = out.get(pos.pair.coin_a, 0.0) + sign_a * (
-            notional_per_leg / pos.entry_price_a
+        size_a = (
+            pos.filled_size_a if pos.filled_size_a > 0 else notional_per_leg / pos.entry_price_a
         )
-        out[pos.pair.coin_b] = out.get(pos.pair.coin_b, 0.0) + sign_b * (
-            notional_per_leg / pos.entry_price_b
+        size_b = (
+            pos.filled_size_b if pos.filled_size_b > 0 else notional_per_leg / pos.entry_price_b
         )
+        out[pos.pair.coin_a] = out.get(pos.pair.coin_a, 0.0) + sign_a * size_a
+        out[pos.pair.coin_b] = out.get(pos.pair.coin_b, 0.0) + sign_b * size_b
     return out
 
 

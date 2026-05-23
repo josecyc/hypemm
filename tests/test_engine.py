@@ -240,6 +240,143 @@ class TestConfirmFills:
         assert engine.positions[pair.label] is None
 
 
+class TestHaltTrading:
+    """halt_trading is the operator-intervention stop, separate from halt_entries.
+
+    halt_entries (set by the risk monitor) still lets open positions exit.
+    halt_trading (set by the runtime reconcile loop on detected drift)
+    suppresses BOTH entries and exits because the engine's view of HL is
+    untrusted — closing might compound the divergence.
+    """
+
+    def test_halt_trading_suppresses_entry(self) -> None:
+        pair = PairConfig("LINK", "SOL")
+        engine = StrategyEngine(_config_with_pair(pair))
+        engine.halt_trading = True
+
+        signal = _make_signal(pair, z=2.5, corr=0.9)
+        orders = engine.process_bar({pair.label: signal}, timestamp_ms=0)
+        assert orders == []
+
+    def test_halt_trading_suppresses_exit(self) -> None:
+        pair = PairConfig("LINK", "SOL")
+        engine = StrategyEngine(_config_with_pair(pair))
+
+        entry_sig = _make_signal(pair, z=-2.5, corr=0.9)
+        orders = engine.process_bar({pair.label: entry_sig}, timestamp_ms=1000)
+        engine.confirm_entry(orders[0], _fill(15.0, 150.0), 1000)
+
+        engine.halt_trading = True
+        exit_sig = _make_signal(pair, z=-0.3, corr=0.9)
+        orders = engine.process_bar({pair.label: exit_sig}, timestamp_ms=2000)
+        assert orders == []
+
+    def test_halt_entries_still_allows_exits(self) -> None:
+        """Risk monitor's halt_entries must NOT block exits — open positions
+        still need to be managed. Regression guard for the halt_trading split."""
+        pair = PairConfig("LINK", "SOL")
+        engine = StrategyEngine(_config_with_pair(pair))
+
+        entry_sig = _make_signal(pair, z=-2.5, corr=0.9)
+        orders = engine.process_bar({pair.label: entry_sig}, timestamp_ms=1000)
+        engine.confirm_entry(orders[0], _fill(15.0, 150.0), 1000)
+
+        engine.halt_entries = True
+        exit_sig = _make_signal(pair, z=-0.3, corr=0.9)
+        orders = engine.process_bar({pair.label: exit_sig}, timestamp_ms=2000)
+        assert len(orders) == 1
+
+
+class TestSignedCoinExposure:
+    """The engine exposes its expected per-coin net signed exposure so the
+    runtime reconcile loop can compare against HL's actual per-coin szi.
+
+    For a 4-pair portfolio with shared coins (e.g., SOL in LINK/SOL and
+    SOL/AVAX), the expected HL net per coin equals the sum of per-pair
+    signed leg sizes. Same-direction pairs add; opposite-direction pairs
+    cancel.
+    """
+
+    def test_empty_engine_returns_empty_exposure(self) -> None:
+        pair = PairConfig("LINK", "SOL")
+        engine = StrategyEngine(_config_with_pair(pair))
+        assert engine.signed_coin_exposure() == {}
+
+    def test_single_long_ratio_position(self) -> None:
+        pair = PairConfig("LINK", "SOL")
+        engine = StrategyEngine(_config_with_pair(pair))
+
+        entry_sig = _make_signal(pair, z=-2.5, corr=0.85)
+        orders = engine.process_bar({pair.label: entry_sig}, timestamp_ms=1000)
+        engine.confirm_entry(
+            orders[0],
+            FillReport(price_a=10.0, price_b=100.0, size_a=2.5, size_b=0.5, fee_a=0.0, fee_b=0.0),
+            1000,
+        )
+        exp = engine.signed_coin_exposure()
+        # LONG_RATIO = long A (LINK), short B (SOL)
+        assert exp == {"LINK": pytest.approx(2.5), "SOL": pytest.approx(-0.5)}
+
+    def test_same_direction_shared_coin_adds(self) -> None:
+        """Two pairs both long SOL → expected net is the sum of their leg sizes."""
+        link_sol = PairConfig("LINK", "SOL")
+        sol_avax = PairConfig("SOL", "AVAX")
+        engine = StrategyEngine(StrategyConfig(pairs=(link_sol, sol_avax)))
+
+        # LINK/SOL SHORT_RATIO: short LINK, long SOL +0.29
+        sig1 = _make_signal(link_sol, z=2.5, corr=0.85)
+        orders = engine.process_bar({link_sol.label: sig1}, timestamp_ms=1000)
+        engine.confirm_entry(
+            orders[0],
+            FillReport(price_a=10.0, price_b=86.0, size_a=2.6, size_b=0.29, fee_a=0.0, fee_b=0.0),
+            1000,
+        )
+        # SOL/AVAX LONG_RATIO: long SOL +0.27, short AVAX
+        sig2 = _make_signal(sol_avax, z=-2.5, corr=0.85, price_a=86.0, price_b=10.0)
+        orders = engine.process_bar({sol_avax.label: sig2}, timestamp_ms=2000)
+        engine.confirm_entry(
+            orders[0],
+            FillReport(price_a=86.0, price_b=10.0, size_a=0.27, size_b=2.55, fee_a=0.0, fee_b=0.0),
+            2000,
+        )
+        exp = engine.signed_coin_exposure()
+        # Both pairs long SOL → SOL net = +0.29 + 0.27 = +0.56
+        assert exp["SOL"] == pytest.approx(0.56)
+        assert exp["LINK"] == pytest.approx(-2.6)
+        assert exp["AVAX"] == pytest.approx(-2.55)
+
+    def test_opposite_direction_shared_coin_nets(self) -> None:
+        """The exact scenario that caused this incident: SOL/AVAX LONG_RATIO
+        short AVAX 2.55, plus DOGE/AVAX SHORT_RATIO long AVAX 2.56 — expected
+        net is +0.01, matching the HL fill 'dir=Short > Long' we observed.
+        """
+        sol_avax = PairConfig("SOL", "AVAX")
+        doge_avax = PairConfig("DOGE", "AVAX")
+        engine = StrategyEngine(StrategyConfig(pairs=(sol_avax, doge_avax)))
+
+        # SOL/AVAX LONG_RATIO: long SOL, short AVAX -2.55
+        sig1 = _make_signal(sol_avax, z=-2.5, corr=0.85, price_a=86.0, price_b=10.0)
+        orders = engine.process_bar({sol_avax.label: sig1}, timestamp_ms=1000)
+        engine.confirm_entry(
+            orders[0],
+            FillReport(price_a=86.0, price_b=10.0, size_a=0.27, size_b=2.55, fee_a=0.0, fee_b=0.0),
+            1000,
+        )
+        # DOGE/AVAX SHORT_RATIO: short DOGE, long AVAX +2.56
+        sig2 = _make_signal(doge_avax, z=2.5, corr=0.85, price_a=0.1, price_b=10.0)
+        orders = engine.process_bar({doge_avax.label: sig2}, timestamp_ms=2000)
+        engine.confirm_entry(
+            orders[0],
+            FillReport(price_a=0.1, price_b=10.0, size_a=250.0, size_b=2.56, fee_a=0.0, fee_b=0.0),
+            2000,
+        )
+        exp = engine.signed_coin_exposure()
+        # AVAX net = -2.55 + 2.56 = +0.01
+        assert exp["AVAX"] == pytest.approx(0.01)
+        assert exp["SOL"] == pytest.approx(0.27)
+        assert exp["DOGE"] == pytest.approx(-250.0)
+
+
 class TestStatePersistence:
     def test_get_and_load_state_round_trip(self) -> None:
         pair = PairConfig("LINK", "SOL")
