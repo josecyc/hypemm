@@ -42,9 +42,24 @@ Preserved on disk but not relaunched.
 - `data/runs/testnet/optimized_3pair/` — testnet smoke-test artifacts; no
   active runner.
 
-Last deployed commit, server-side: `d1c8289` on `accounting-overhaul`
-(verified 2026-05-12). The runner was restarted on 2026-05-12 to clear a
-stuck DOGE/ADA position whose close legs filled on HL on 2026-05-10 but
-whose `confirm_exit` was suppressed by a then-fatal slippage cap. Same
-restart picked up the slippage-cap-to-warning fix
-(`c1da297` + `d1c8289`), so the same divergence cannot recur.
+Last deployed commit, server-side: `4c17dba` on `accounting-overhaul`
+(restarted 2026-05-24 17:32 UTC). The runner was stopped, two stuck
+positions (LINK/SOL, SOL/AVAX) were cleared from `state.json` after
+diagnosing a multi-pair coin-netting bug: non-`reduceOnly` entries on
+shared coins (e.g. DOGE/AVAX SHORT_RATIO buying AVAX while SOL/AVAX
+LONG_RATIO was short AVAX) silently crossed each other on HL, and
+subsequent `reduceOnly` closes then rejected with "would increase
+position". `4c17dba` drops `reduceOnly` on closes and adds a runtime
+reconcile loop that halts trading if engine state diverges from HL.
+Realized cost of the incident was −$2 (16 fills' worth of closedPnl + fees).
+
+Spot/perp note: this account is in HL "unified account" mode — the
+legacy `clearinghouseState.accountValue` reads `0` but margin actually
+comes from the unified pool, and orders fill normally against it. Do
+not interpret `accountValue: 0` as "out of funds"; cross-check with
+`spotClearinghouseState` and the HL UI's Total Equity.
+
+Prior incident (2026-05-12): a stuck DOGE/ADA position whose close
+legs filled on HL on 2026-05-10 but whose `confirm_exit` was suppressed
+by a then-fatal slippage cap. Fixed by `c1da297` + `d1c8289`
+(slippage-cap-to-warning).
